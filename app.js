@@ -1,0 +1,1485 @@
+
+// Spectral Point Collector v0.3
+// A UI for to BCET Landsat data and to collect
+// spectral signatures for multiple point locations
+// Copyright (C) 2017 Sam Brooke
+// Email: sbrooke@tuta.io
+
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+var app = {};
+
+app.project_variables = {
+  title: 'Untitled',
+  output_directory: '',
+  IMAGE: '',
+  region_bounds: []
+};
+
+app.setProjectTitle = function() {
+  var title = app.project_name_input.getValue();
+  title = title.replace(/ /g, "_").replace(/[|&;$%@"<>()+,]/g, "");
+  app.project_variables.title = title;
+  app.project_name_input.setValue(title, false);
+};
+
+app.clearLayerAssets = function(names) {
+
+  var clearMap = function(e,i){
+    if(names.indexOf(e.get('name')) > -1){
+      Map.remove(e);
+    }
+  };
+  // Run twice because some units are weirdly missing
+  for(var i = 0; i < 2; i++){
+    Map.layers().forEach(clearMap);
+  }
+};
+
+app.mapObjects = [];
+
+app.selectRegion = function() {
+    Map.style().set('cursor', 'crosshair');
+    app.mapAssets = [];
+    app.clearLayerAssets(['regionRectangle','regionBottomRight','regionTopLeft']); 
+
+    var listenerId = Map.onClick(function(coords) {
+      
+      var point = ee.Geometry.Point(coords.lon, coords.lat);
+      
+      // Once the panel is hidden, the map should not
+      // try to close it by listening for clicks.
+      app.mapAssets.push(point);
+      
+      if(app.mapAssets.length > 1){
+        
+        var topLeft = app.mapAssets[0];
+        var bottomRight = app.mapAssets[1];
+        
+        Map.addLayer(point, {color: 'FF0000'}, 'regionBottomRight');
+        
+        var yMax = topLeft.coordinates().get(1).getInfo();
+        var yMin = bottomRight.coordinates().get(1).getInfo();
+        var xMax = topLeft.coordinates().get(0).getInfo();
+        var xMin = bottomRight.coordinates().get(0).getInfo();
+        
+        app.top_left_lat.setValue(yMax, false);
+        app.bottom_right_lat.setValue(yMin, false);
+        app.top_left_lon.setValue(xMax, false);
+        app.bottom_right_lon.setValue(xMin, false);
+        
+        var region_bounds = [xMin, yMin, xMax, yMax];
+        
+        app.project_variables.region_bounds = region_bounds;
+        app.roi = ee.Geometry.Rectangle(region_bounds);
+        var roi_coords = app.roi.coordinates().get(0);
+        app.roi_outline = ee.Geometry.LineString(roi_coords);
+        
+        Map.addLayer(app.roi, {color: 'FF0000'}, 'regionRectangle');
+        Map.unlisten(listenerId);
+      } else {
+        Map.addLayer(point, {color: 'FF0000'}, 'regionTopLeft');
+      }
+    });
+};
+
+app.setRegion = function() {
+  app.clearLayerAssets(['regionRectangle','regionBottomRight','regionTopLeft']);
+  
+  if(app.top_left_lat.getValue()){
+
+    var yMax = ee.Number.parse(app.top_left_lat.getValue());
+    var yMin = ee.Number.parse(app.bottom_right_lat.getValue());
+    var xMin = ee.Number.parse(app.top_left_lon.getValue());
+    var xMax = ee.Number.parse(app.bottom_right_lon.getValue());
+    
+    if(yMax && yMin && xMax && xMin){
+      var region_bounds = [xMin, yMin, xMax, yMax];
+      
+      app.project_variables.region_bounds = region_bounds;  
+      app.roi = ee.Geometry.Rectangle(region_bounds);
+      var roi_coords = app.roi.coordinates().get(0);
+      app.roi_outline = ee.Geometry.LineString(roi_coords);   
+      
+      Map.addLayer(app.roi, {color: 'FF0000'}, 'regionRectangle');
+      
+      var tl = ee.Geometry.Point(xMin, yMax);
+      var br = ee.Geometry.Point(xMax, yMin);
+      
+      Map.addLayer(tl, {color: 'FF0000'}, 'regionTopLeft');
+      Map.addLayer(br, {color: 'FF0000'}, 'regionBottomRight');
+      
+      app.centerRegion();
+    }
+  }
+};
+
+app.centerRegion = function(){
+  if (app.roi){
+    Map.centerObject(app.roi);
+  }
+};
+
+app.setImage = function() {
+  var imageIdTrailer = app.picker.select.getValue();
+  app.project_variables.IMAGE = app.COLLECTION_ID + '/' + imageIdTrailer;
+  app.filters.panel.style().set('shown', false);
+  app.picker.panel.style().set('shown', false);
+  app.vis.panel.style().set('shown', false);
+  app.regionSelect.panel.style().set('shown', true);
+};
+
+app.BCET_Region_init = function(){
+  app.BCET.panel.style().set('shown', true);
+  app.regionSelect.panel.style().set('shown', false);  
+};
+
+app.createInputs = function(){
+  app.project_name_input = ui.Textbox({
+    placeholder: 'Project Name',
+    onChange: app.setProjectTitle,
+    style: {
+      stretch: 'horizontal'
+    }
+  });
+  
+  app.top_left_lat = ui.Textbox({
+    placeholder: 'Lat',
+    style: {
+      width: '50px'
+    }
+  });
+  app.top_left_lon = ui.Textbox({
+    placeholder: 'Lon',
+    style: {
+      width: '50px'
+    }
+  });
+  app.bottom_right_lat = ui.Textbox({
+    placeholder: 'Lat',
+    style: {
+      width: '50px'
+    }
+  });
+  app.bottom_right_lon = ui.Textbox({
+    placeholder: 'Lon',
+    style: {
+      width: '50px'
+    }
+  });
+  app.position_panel = ui.Panel([
+    ui.Label({
+      value: 'Top Left:',
+      style: {fontWeight: 'bold', fontSize: '10px'}
+    }),
+    app.top_left_lat,
+    app.top_left_lon,
+    ui.Label({
+      value: 'Bot Right:',
+      style: {fontWeight: 'bold', fontSize: '10px'}
+    }),
+    app.bottom_right_lat,
+    app.bottom_right_lon
+  ], ui.Panel.Layout.flow('horizontal'));
+
+  app.position_inputs = {
+    panel: app.position_panel
+  };
+};
+
+app.todaysDate = function(){
+  var today = new Date();
+  var dd = today.getDate();
+  var mm = today.getMonth()+1; //January is 0!
+
+  var yyyy = today.getFullYear();
+  
+  if(dd<10){
+    dd='0'+dd;
+  } 
+  
+  if(mm<10){
+    mm='0'+mm;
+  }
+  
+  app.today = [yyyy,mm,dd].join('-');
+};
+app.todaysDate();
+
+// Point Data Functions
+
+var guid = function() {
+  function s4() {
+    return Math.floor((1 + Math.random()) * 0x10000)
+      .toString(16)
+      .substring(1);
+  }
+  return s4() + s4();
+};
+
+// Dictionary for storing coordinate data
+app.coordData = {};
+app.pointerIds = [];
+app.pointListenId = false;
+app.hex_counter = 0;
+app.colorList = {};
+app.bandChart = false;
+
+app.pointMapListen = function(){
+  
+  if(!app.pointerIds){
+   var r = confirm("Do you want to clear the map?");
+  
+    if (r == 1) {
+      app.clearLayerAssets(app.pointerIds);
+      app.pointerIds = [];
+      app.coordData = {};
+    }
+  }
+  
+  Map.style().set('cursor', 'crosshair');
+
+  app.pointListenId = Map.onClick(function(coords) {
+    
+    app.createPoint(coords, false);
+  });
+};
+
+app.pointMapUnlisten = function(){
+  if(app.pointListenId){
+    Map.unlisten(app.pointListenId);
+    app.pointListenId = false;
+    Map.style().set('cursor', 'hand');
+  }
+};
+
+app.removePointMarker = function(marker_id){
+  app.clearLayerAssets([marker_id]);
+  var index = app.pointerIds.indexOf(marker_id);
+  if (index > -1) {
+    app.pointerIds.splice(index, 1);
+  }
+  delete app.coordData[marker_id];
+  delete app.colorList[marker_id];
+  app.setBandChart(app.pointerIds);
+};
+
+app.centreMarker = function(marker_id){
+  var coords = app.coordData[marker_id];
+  Map.setCenter(coords.lon, coords.lat);
+};
+
+app.updateVisibleBands = function(){
+  app.BCET_CHART_BANDS = [];
+  for (var i = 0; i < app.BCET_BANDS.length; i++) {
+    var input_name = app.BCET_BANDS[i]+'_visible';
+    if (app[input_name].getValue()){
+      app.BCET_CHART_BANDS.push(app.BCET_BANDS[i]);
+    }
+  }
+  app.setBandChart(app.pointerIds);
+};
+
+app.visibleBandSelect = function(){
+  for (var i = 0; i < app.BCET_BANDS.length; i++) {
+    var input_name = app.BCET_BANDS[i]+'_visible';
+    app[input_name] = ui.Checkbox({
+      label: app.BCET_BANDS[i],
+      value: true,
+      onChange: app.updateVisibleBands
+    });
+    app.chartBandSelect.panel.add(app[input_name]);
+  }
+  app.setBandChart(app.pointerIds);
+  app.showHideChartBandBtn = ui.Button({
+    label: 'Hide', 
+    onClick: function(){
+      for (var i = 0; i < app.BCET_BANDS.length; i++) {
+        var input_name = app.BCET_BANDS[i]+'_visible';
+        if (app[input_name].style().get('shown')){
+          if(i === 0){
+            app.showHideChartBandBtn.set('label', 'Show');
+          }
+          app[input_name].style().set('shown', false);
+        } else {
+          if(i === 0){
+            app.showHideChartBandBtn.set('label', 'Hide');
+          }
+          app[input_name].style().set('shown', true);
+        }
+      }     
+    },
+    style: {
+      stretch:'horizontal',
+      fontSize: '18px'
+    }
+  });
+  app.chartBandSelect.panel.add(app.showHideChartBandBtn);
+};
+
+app.setBandChart = function(marker_ids){
+  if(app.BCET_CHART_BANDS && (marker_ids.length > 0)){
+    var points = [];
+    var plot_series = {};
+    
+    for (var i = 0; i < marker_ids.length; i++) {
+      var coords = app.coordData[marker_ids[i]];
+      var point = ee.Feature(ee.Geometry.Point(coords.lon, coords.lat), {label: marker_ids[i]});
+      points.push(point);
+      plot_series[i] = {color: app.colorList[marker_ids[i]]};
+    }
+    var bandPoints = ee.FeatureCollection(points);
+    if (app.bandChart){
+      app.coordMasterPanel.remove(app.bandChart);
+    }
+    
+    var imageBands = app.CURRENT_IMAGE.select(app.BCET_CHART_BANDS);
+  
+    app.bandChart = ui.Chart.image.regions({
+      image: imageBands,
+      regions: bandPoints,
+      seriesProperty: 'label',
+      scale: 30
+    });
+    
+    app.bandChart.setChartType('LineChart');
+    app.bandChart.setOptions({
+      title: 'BCET Reflectance',
+      hAxis: {
+        title: 'Band'
+      },
+      vAxis: {
+        title: 'Reflectance'
+      },
+      lineWidth: 1,
+      pointSize: 4,
+      series: plot_series
+    });
+    
+    app.coordMasterPanel.add(app.bandChart);
+  }
+};
+
+
+app.coordPanel = function(lat, lon, marker_id){
+  var cp = ui.Panel([
+    ui.Label({
+      value: 'Id: '+marker_id.toString(),
+      style: {padding: '0 10px 0 0', fontSize: '12px', backgroundColor: app.colorList[marker_id]}
+    }),
+    ui.Label({
+      value: 'Lat: '+lat.toFixed(8).toString(),
+      style: {padding: '0 10px 0 0', fontSize: '12px'}
+    }),
+    ui.Label({
+      value: 'Lon: '+lon.toFixed(8).toString(),
+      style: {padding: '0 10px 0 0', fontSize: '12px'}
+    })
+  ], ui.Panel.Layout.flow('horizontal'));
+  var center_btn = ui.Button({
+    label: 'Centre Map',
+    onClick: function(){
+      app.centreMarker(marker_id);
+    },
+    style: {
+      fontSize: '16px'
+    }
+  });
+  var rmv_btn = ui.Button({
+    label: 'Remove', 
+    onClick: function(){
+      app.removePointMarker(marker_id);
+      app.coordMasterPanel.remove(cp);
+    },
+    style: {
+      fontSize: '16px'
+    }
+  });
+  cp.add(center_btn);
+  cp.add(rmv_btn);
+  
+  return cp;
+};
+
+app.createPoint = function(coords, sample_name_original){
+    
+    var gid = guid();
+    var coord_id = '';
+    
+    if(sample_name_original){
+      var sample_name = sample_name_original.replace(/ /g, "_").replace(/[|&;$%@"<>()+,]/g, "");
+      
+      if (app.pointerIds.indexOf(sample_name) < 0){
+        coord_id = sample_name;
+      } else {
+        coord_id = [coord_id, gid].join('_');
+      }
+    } else {
+      coord_id = gid;
+    }
+    var point = ee.Geometry.Point(coords.lon, coords.lat);
+    app.pointerIds.push(coord_id);
+    app.coordData[coord_id] = coords;
+    app.colorList[coord_id] = app.HEX_CODES[app.hex_counter];
+    app.coordMasterPanel.add(app.coordPanel(coords.lat, coords.lon, coord_id));
+    Map.addLayer(point, {color: app.HEX_CODES[app.hex_counter]}, coord_id);
+    if (app.hex_counter < (app.HEX_CODES.length)-1) {
+      app.hex_counter++;
+    } else {
+      app.hex_counter = 0;
+    }
+    app.setBandChart(app.pointerIds);
+};
+
+app.addManualCoord = function(){
+  var gid = guid();
+  // var coords = {
+  //   lon: ee.Number.parse(app.lon_input.getValue()).getInfo(), 
+  //   lat: ee.Number.parse(app.lat_input.getValue()).getInfo()
+  // };
+  var coord_vals = [ee.Number.parse(app.lon_input.getValue()), ee.Number.parse(app.lat_input.getValue())];
+  var coords = ee.Dictionary(['lon', 'lat'], coord_vals);
+  var sample_name = app.sample_input.getValue().getInfo;
+  app.createPoint(coords, sample_name);
+};
+
+app.exportCoords = function(){
+  var points = [];
+  if (app.pointerIds){
+    for (var i = 0; i < app.pointerIds.length; i++) {
+      var coords = app.coordData[app.pointerIds[i]];
+      var point = ee.Feature(ee.Geometry.Point(coords.lon, coords.lat), {label: app.pointerIds[i]});
+      points.push(point);
+    }
+    var bandPoints = ee.FeatureCollection(points);
+    var fid = guid();
+    var fileName = [fid,app.project_variables.title].join('_');
+    Export.table.toDrive({
+      collection:bandPoints,
+      description: [fid,'Coordinates',app.project_variables.title].join('_'),
+      fileNamePrefix: fileName, 
+      fileFormat: 'KMZ'
+    });
+  }
+};
+
+app.BCETRegion = function(){
+  app.regionSelect.panel.style().set('shown', false);
+  app.BCETBandSelect.panel.style().set('shown', true);
+  
+  var collection_params = app.COLLECTION_ID.split('/');
+  
+  if(collection_params[0] == 'LANDSAT'){
+    var bandNames = ee.List(['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7']);
+  } else {
+    // SENTINEL BANDS
+    var bandNames = ee.List(['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7',
+    'B8', 'B8A', 'B9', 'B10', 'B11', 'B12']);
+  }
+  
+  var box = app.roi;
+  
+  if(box){
+    var reducers = ee.Reducer.mean().combine({
+      reducer2: ee.Reducer.minMax(),
+      sharedInputs: true
+    });
+    
+    var stats = app.CURRENT_IMAGE.reduceRegion({
+      reducer: reducers,
+      geometry: box,
+      crs: 'EPSG:4326',
+      crsTransform: [0.00025,0,0,0,-0.00025,0],
+      bestEffort:true
+    });
+    
+    var pow2 = app.CURRENT_IMAGE.pow(2);
+    
+    var s_values = pow2.reduceRegion({
+      reducer: ee.Reducer.mean(),
+      geometry: box,
+      crs: 'EPSG:4326',
+      crsTransform: [0.00025,0,0,0,-0.00025,0],
+      bestEffort:true
+    });
+    
+  } else {
+    var reducers = ee.Reducer.mean().combine({
+      reducer2: ee.Reducer.minMax(),
+      sharedInputs: true
+    });
+    
+    var stats = app.CURRENT_IMAGE.reduceRegion({
+      reducer: reducers,
+      crs: 'EPSG:4326',
+      crsTransform: [0.00025,0,0,0,-0.00025,0],
+      bestEffort:true
+    });
+    
+    var pow2 = app.CURRENT_IMAGE.pow(2);
+    
+    var s_values = pow2.reduceRegion({
+      reducer: ee.Reducer.mean(),
+      crs: 'EPSG:4326',
+      crsTransform: [0.00025,0,0,0,-0.00025,0],
+      bestEffort:true
+    });   
+  }
+    
+  
+  // BCET values
+  var L =  ee.Number(0); // minimum
+  var H =  ee.Number(255); // maximum
+  var E =  ee.Number(110); // mean
+  
+  var i = 0;
+  //var len = bandNames.length().getInfo();
+  var len = bandNames.length().getInfo();
+
+  app.BCET_BANDS = [];
+
+  for (i = 0; i < len; i++) {
+    var band_name = bandNames.get(i).getInfo();
+    
+    var band = app.CURRENT_IMAGE.select(band_name);
+    
+    var params = app.bcet_presets[band_name];
+    
+    if(params.a === false){
+      
+      var l = ee.Number(stats.get(band_name.concat('_min')));
+      var h = ee.Number(stats.get(band_name.concat('_max')));
+      var e = ee.Number(stats.get(band_name.concat('_mean')));
+      var s = ee.Number(s_values.get(band_name));
+      
+      var b_nom = h.pow(2).multiply(E.subtract(L)).subtract(s.multiply(H.subtract(L))).add(l.pow(2).multiply(H.subtract(E)));
+      var b_den = ee.Number(2).multiply(h.multiply(E.subtract(L)).subtract(e.multiply(H.subtract(L))).add(l.multiply(H.subtract(E))));
+      var b = b_nom.divide(b_den);
+      
+      var a1 = H.subtract(L);
+      var a2 = h.subtract(l);
+      var a3 = h.add(l).subtract(ee.Number(2).multiply(b));
+      
+      var a = a1.divide(a2.multiply(a3));
+      
+      var c = L.subtract(a.multiply(l.subtract(b).pow(2)));
+      
+    } else {
+      var a = params.a;
+      var b = params.b;
+      var c = params.c;
+    }
+    
+    var y = app.CURRENT_IMAGE.expression(
+      'a * (x - b)**2 + c', {
+      'a': a,
+      'b': b,
+      'c': c,
+      'x': app.CURRENT_IMAGE.select(band_name)
+    });
+    
+    var y_r = y.select(
+        ['constant',], // old names
+        [band_name.concat('_BCET')] // new names
+    );
+    
+    app.BCET_BANDS.push(band_name.concat('_BCET'));
+    
+    app.CURRENT_IMAGE = app.CURRENT_IMAGE.addBands(y_r, [band_name.concat('_BCET')]);
+  }
+  
+  app.BCETvisParams = {
+    bands: ['B5_BCET', 'B4_BCET', 'B3_BCET'],
+    min: 0,
+    max: 255,
+    gamma: [0.95, 1.1, 1]
+  };
+
+  var mean_check = app.CURRENT_IMAGE.select(app.BCET_BANDS).reduceRegion({
+    reducer: ee.Reducer.mean(),
+    geometry: box,
+    crs: 'EPSG:4326',
+    crsTransform: [0.00025,0,0,0,-0.00025,0],
+    bestEffort:true
+  });
+  
+  print('BCET mean values...');
+  print(mean_check);
+  
+  Map.clear();
+  Map.addLayer(app.CURRENT_IMAGE, app.BCETvisParams);
+  
+  if(box){
+    Map.addLayer(app.roi_outline, {color: 'FFFFFF'}, 'roi_outline');
+  }
+  
+  app.centerRegion();
+  app.BCETBandSelect.panel.clear();
+  app.BCETBandSelectInputs();
+  app.continueToPoint.panel.style().set('shown', true);
+};
+
+
+app.refreshBCETLayer = function(){
+  // DEFAULT = ['B5_BCET', 'B4_BCET', 'B3_BCET']
+  var R = app.BCET_R.getValue();
+  var G = app.BCET_G.getValue();
+  var B = app.BCET_B.getValue();
+  
+  app.BCETvisParams = {
+    bands: [R, G, B],
+    min: 0,
+    max: 255,
+    gamma: [0.95, 1.1, 1]
+  };
+  Map.clear();
+  Map.addLayer(app.CURRENT_IMAGE, app.BCETvisParams);
+  Map.addLayer(app.roi_outline, {color: 'FFFFFF'}, 'roi_outline');
+
+};
+
+app.pointSetup = function(){
+  app.BCET.panel.style().set('shown', false);
+  app.BCETBandSelect.panel.style().set('shown', false);
+  app.continueToPoint.panel.style().set('shown', false);
+  
+  app.visibleBandSelect();
+  
+  app.chartBandSelect.panel.style().set('shown', true);
+  app.pointSelect.panel.style().set('shown', true);
+  app.export.panel.style().set('shown', true);  
+  app.BCET_CHART_BANDS = app.BCET_BANDS;
+};
+
+app.print_reflectance_data = function(){
+  // Empty Collection to fill
+  var marker_ids = app.pointerIds;
+  var points = [];
+  for (var i = 0; i < marker_ids.length; i++) {
+    var coords = app.coordData[marker_ids[i]];
+    var point = ee.Feature(ee.Geometry.Point(coords.lon, coords.lat), {label: marker_ids[i]});
+    points.push(point);
+  }
+  var pts = ee.FeatureCollection(points);
+  
+  var ft = ee.FeatureCollection(ee.List([]));
+
+  var fill = function(img, ini) {
+    // type cast
+    var inift = ee.FeatureCollection(ini);
+    // gets the values for the points in the current img
+    var ft2 = img.reduceRegions({
+      collection:pts,
+      reducer:ee.Reducer.first(),
+      crs: 'EPSG:4326',
+      crsTransform: [0.00025,0,0,0,-0.00025,0]
+    });
+    return inift.merge(ft2);
+  };
+  
+  var fid = guid();
+  var fileName = [fid,app.project_variables.title].join('_');
+  
+  var res = fill(app.CURRENT_IMAGE.select(app.BCET_CHART_BANDS), ft);
+  
+  Export.table.toDrive({
+      collection:res,
+      description: [fid,'Reflectance',app.project_variables.title].join('_'),
+      fileNamePrefix: fileName, 
+      fileFormat: 'CSV'
+  });
+};
+
+// Create Interface
+app.createPanels = function() {
+  app.intro = {
+    panel: ui.Panel([
+      ui.Label({
+        value: 'Spectral Point Collector',
+        style: {fontWeight: 'bold', fontSize: '24px', margin: '10px 5px'}
+      }),
+      ui.Label('A UI select a region, BCET and grab'+
+              ' spectral signatures for multiple point locations'),
+      app.project_name_input
+    ])
+  };
+
+  // LANDSAT/SENTINEL Data chooser -- lifted from Google Script
+  app.filters = {
+    mapCenter: ui.Checkbox({label: 'Filter to map center', value: true}),
+    startDate: ui.Textbox('YYYY-MM-DD', '2014-02-01'),
+    endDate: ui.Textbox('YYYY-MM-DD', app.today),
+    applyButton: ui.Button('Get Images', app.applyFilters),
+    cloudButton: ui.Button('Cloud-free Composite', app.cloudComposite),
+    loadingLabel: ui.Label({
+      value: 'Loading...',
+      style: {stretch: 'vertical', color: 'gray', shown: false}
+    })
+  };
+
+  /* The panel for the filter control widgets. */
+  app.filters.panel = ui.Panel({
+    widgets: [
+      ui.Label('Select Location', {fontWeight: 'bold'}),
+      ui.Select({
+        items: ['Landsat 8', 'Sentinel 2'],
+        value:'Landsat 8',
+        onChange: app.selectDataset
+      }),
+      ui.Label('Pan and zoom map to area'),
+      ui.Label('Start date', app.HELPER_TEXT_STYLE), app.filters.startDate,
+      ui.Label('End date', app.HELPER_TEXT_STYLE), app.filters.endDate,
+      app.filters.mapCenter,
+      ui.Panel([
+        app.filters.applyButton,
+        app.filters.cloudButton,
+        app.filters.loadingLabel
+      ], ui.Panel.Layout.flow('horizontal'))
+    ],
+    style: app.SECTION_STYLE
+  });
+
+  /* The image picker section. */
+  app.picker = {
+    // Create a select with a function that reacts to the "change" event.
+    select: ui.Select({
+      placeholder: 'Select an image ID',
+      onChange: app.refreshMapLayer
+    })
+  };
+
+  app.manual_image = ui.Textbox({
+    placeholder: 'DATASET/COLLECTION/IMAGE',
+    style: {
+      width: '400px'
+    }
+  });
+  
+  app.manual_image_setup = function(){
+    Map.clear();
+    var manual_image_id = ee.String(app.manual_image.getValue()).getInfo();
+    var mc = manual_image_id.split('/');
+    app.COLLECTION_ID = mc[0]+'/'+mc[1];
+    app.CURRENT_IMAGE = ee.Image(manual_image_id);
+    app.VIS_OPTIONS = app.vis_params();
+    var visOption = app.VIS_OPTIONS[app.vis.select.getValue()];
+    Map.addLayer(app.CURRENT_IMAGE, visOption.visParams, manual_image_id);
+  };
+  
+  /* The panel for the picker section with corresponding widgets. */
+  app.picker.panel = ui.Panel({
+    widgets: [
+      ui.Label('Choose an image', {fontWeight: 'bold'}),
+      ui.Panel([
+        app.picker.select
+      ], ui.Panel.Layout.flow('horizontal')),
+      ui.Panel([
+        app.manual_image,
+        ui.Button({
+          label: 'Load',
+          onClick: app.manual_image_setup,
+          style: {
+            fontSize: '16px'
+          }
+        })
+      ], ui.Panel.Layout.flow('horizontal'))
+    ],
+    style: app.SECTION_STYLE
+  });
+
+  /* The visualization section. */
+  app.vis = {
+    label: ui.Label(),
+    // Create a select with a function that reacts to the "change" event.
+    select: ui.Select({
+      items: Object.keys(app.VIS_OPTIONS),
+      onChange: function() {
+        // Update the label's value with the select's description.
+        var option = app.VIS_OPTIONS[app.vis.select.getValue()];
+        app.vis.label.setValue(option.description);
+        // Refresh the map layer.
+        app.refreshMapLayer();
+      }
+    })
+  };
+  
+  /* The panel for the visualization section with corresponding widgets. */
+  app.vis.panel = ui.Panel({
+    widgets: [
+      ui.Label('Visualise', {fontWeight: 'bold'}),
+      app.vis.select,
+      app.vis.label,
+      ui.Button({
+        label: 'Next', 
+        onClick: app.setImage, 
+        style: {
+          stretch:'horizontal',
+          fontSize: '18px'
+        }        
+      })
+    ],
+    style: app.SECTION_STYLE
+  });
+
+  // Default the select to the first value.
+  app.vis.select.setValue(app.vis.select.items().get(0)); 
+  
+  app.regionSelect = {
+    panel: ui.Panel([
+      ui.Label({
+        value: 'Region',
+        style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}
+      }),
+      ui.Label('Select the rectangular region of interest (1st click for top left corner, 2nd for bottom right)'),
+      ui.Button({
+        label: 'Select Region', 
+        onClick: app.selectRegion, 
+        style: {
+          stretch:'horizontal',
+          fontSize: '18px'
+        }
+      }),
+      app.position_inputs.panel,
+      ui.Button({
+        label: 'Set region from manual coordinates', 
+        onClick: app.setRegion, 
+        style: {
+          stretch:'horizontal'
+        }
+      }),
+      ui.Button({
+        label: 'Recentre on region', 
+        onClick: app.centerRegion, 
+        style: {
+          stretch:'horizontal'
+        }
+      }),
+      ui.Button({
+        label: 'Next', 
+        onClick: app.BCET_Region_init, 
+        style: {
+          stretch:'horizontal'
+        }
+      })
+    ])
+  };
+  
+  app.BCET = {
+    panel: ui.Panel([
+      ui.Label({
+        value: 'Region',
+        style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}
+      }),
+      ui.Label('BCET region of interest (after Liu et al. 1994)'),
+      ui.Button({
+        label: 'BCET Region', 
+        onClick: app.BCETRegion, 
+        style: {
+          stretch:'horizontal',
+          fontSize: '18px'
+        }
+      })
+    ])
+  };
+  
+  app.BCETBandSelectInputs = function(){
+    print(app.BCET_BANDS)
+    var widgets = [
+      ui.Label({
+          value: 'Select Bands:',
+          style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}
+      }),
+    ];
+    
+    app.BCET_R = ui.Select({
+        items: app.BCET_BANDS,
+        value: 'B5_BCET',
+        placeholder: 'R',
+        onChange: function() {
+          app.refreshBCETLayer();
+        }
+    });
+    
+    app.BCET_G = ui.Select({
+        items: app.BCET_BANDS,
+        value: 'B4_BCET',
+        placeholder: 'G',
+        onChange: function() {
+          app.refreshBCETLayer();
+        }
+    });
+    
+    app.BCET_B = ui.Select({
+        items: app.BCET_BANDS,
+        value: 'B3_BCET',
+        placeholder: 'B',
+        onChange: function() {
+          app.refreshBCETLayer();
+        }
+    });
+    
+    widgets.push(ui.Label({value: 'R', style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}}));
+    widgets.push(app.BCET_R);
+    widgets.push(ui.Label({value: 'G', style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}}));
+    widgets.push(app.BCET_G);
+    widgets.push(ui.Label({value: 'B', style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}}));
+    widgets.push(app.BCET_B);
+    
+    widgets.push(
+      ui.Button({
+        label: 'Export Tif', 
+        onClick: app.exportRegion, 
+        style: {
+          stretch:'horizontal',
+          fontSize: '18px'
+        }
+      })      
+    );
+    
+    for(var i = 0; i < widgets.length; i++){
+       app.BCETBandSelect.panel.add(widgets[i]);
+    }
+  };
+  
+  app.loadFusionTable = function(){
+    var fusion_id = app.fusion_table_id.getValue();
+    
+    if(fusion_id){
+      var fid_protocol = ee.String('ft:').cat(fusion_id).getInfo();
+      var fusion_data = ee.FeatureCollection(fid_protocol);
+      
+      var names = fusion_data.aggregate_array('Name').getInfo();
+      var cc = fusion_data.geometry().coordinates();
+      var g = cc.length().getInfo();
+      for(var i = 0; i < g; i++){
+        var latlon = cc.get(i).getInfo();
+        var coords = {
+          lat:latlon[1],
+          lon:latlon[0]
+        };
+        app.createPoint(coords, names[i]);
+      }
+      app.fusion_table_id.setValue('');
+    }
+  };
+  
+  app.BCETBandSelect = {
+    panel: ui.Panel([ui.Label('Processing BCET...')], ui.Panel.Layout.flow('horizontal'))
+  };
+  
+  app.continueToPoint = {
+    panel: ui.Panel([
+      ui.Button({
+        label: 'Continue to point selection', 
+        onClick: app.pointSetup, 
+        style: {
+          stretch:'horizontal',
+          fontSize: '18px'
+        }
+      })
+    ])
+  };
+  
+  app.chartBandSelect = {
+    panel: ui.Panel([
+      ui.Label({
+        value: 'Select Bands',
+        style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}
+      })
+    ])
+  };
+  
+  app.coordMasterPanel = ui.Panel([]);
+  
+  app.sample_input = ui.Textbox({
+    placeholder: 'Sample',
+    style: {
+      width: '150px'
+    }
+  });
+  
+  app.lat_input = ui.Textbox({
+    placeholder: 'Lat',
+    style: {
+      width: '150px'
+    }
+  });
+  
+  app.lon_input = ui.Textbox({
+    placeholder: 'Lon',
+    style: {
+      width: '150px'
+    }
+  });
+  
+  var addCoordBtn = ui.Button({
+    label: 'Add', 
+    onClick: app.addManualCoord,
+    style: {
+      fontSize: '16px'
+    }
+  });
+  
+  app.manualCoordForm = ui.Panel([
+    app.sample_input,
+    app.lat_input,
+    app.lon_input,
+    addCoordBtn
+  ], ui.Panel.Layout.flow('horizontal'));
+  
+  app.fusion_table_id = ui.Textbox({
+    placeholder: 'Fusion Table ID',
+    style: {
+      width: '250px'
+    }
+  });
+  
+  var loadFusionTableBtn = ui.Button({
+    label: 'Load', 
+    onClick: app.loadFusionTable,
+    style: {
+      fontSize: '16px'
+    }
+  });
+  
+  app.fusionTableForm = ui.Panel([
+    app.fusion_table_id,
+    loadFusionTableBtn
+    ],ui.Panel.Layout.flow('horizontal'));
+  
+  app.pointSelect = {
+    panel: ui.Panel([
+      ui.Label({
+        value: 'Points',
+        style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}
+      }),
+      app.coordMasterPanel,
+      ui.Button({
+        label: 'Select points on map',
+        onClick: app.pointMapListen,
+        style: {
+          stretch:'horizontal'
+        }
+      }),
+      ui.Button({
+        label: 'Pan Mode', 
+        onClick: app.pointMapUnlisten, 
+        style: {
+          stretch:'horizontal'
+        }
+      }),
+      app.manualCoordForm,
+      app.fusionTableForm
+    ])
+  };
+
+  app.export = {
+    panel: ui.Panel([
+      ui.Label({
+        value: 'Export',
+        style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}
+      }),
+      ui.Button({
+        label: 'Export reflectance data to Google Drive (.csv)',
+        onClick: app.print_reflectance_data,
+        style: {
+          stretch:'horizontal'
+        }
+      }),
+      ui.Button({
+        label: 'Export coordinates to Google Drive (.kmz)',
+        onClick: app.exportCoords, 
+        style: {
+          stretch:'horizontal'
+        }
+      }),
+      ui.Label('(This will be stored as task that can be executed in the console above)'),
+    ])
+  };
+  
+  app.debug_start = {
+    panel: ui.Panel([
+      ui.Button({
+        label: 'Start Debug',
+        onClick: app.debug_post_setup,
+        style: {
+          stretch:'horizontal'
+        }
+      })
+    ])
+  };
+  
+  app.exportRegion = function(){
+    Export.image.toDrive({
+      image: app.CURRENT_IMAGE.select(app.BCETvisParams.bands),
+      description: guid()+'_BCET_Export_' + app.project_variables.title    
+    });
+  };
+};
+
+app.selectDataset = function(dataset){
+  if(dataset == 'Landsat 8'){
+    app.COLLECTION_ID = 'LANDSAT/LC8_L1T_32DAY_TOA';
+  } else if(dataset == 'Sentinel 2'){
+    app.COLLECTION_ID = 'COPERNICUS/S2';
+  }
+  app.applyFilters();
+};
+
+app.createHelpers = function() {
+  app.setLoadingMode = function(enabled) {
+    // Set the loading label visibility to the enabled mode.
+    app.filters.loadingLabel.style().set('shown', enabled);
+    // Set each of the widgets to the given enabled mode.
+    var loadDependentWidgets = [
+      app.vis.select,
+      app.filters.startDate,
+      app.filters.endDate,
+      app.filters.applyButton,
+      app.filters.mapCenter,
+      app.picker.select
+    ];
+    loadDependentWidgets.forEach(function(widget) {
+      widget.setDisabled(enabled);
+    });
+  };
+  
+  app.cloudScore = function(img){
+    
+    // LIFTED FROM DOCUMENTATION
+    
+    // A helper to apply an expression and linearly rescale the output.
+    var rescale = function(img, exp, thresholds) {
+      return img.expression(exp, {img: img})
+          .subtract(thresholds[0]).divide(thresholds[1] - thresholds[0]);
+    };
+  
+    // Compute several indicators of cloudyness and take the minimum of them.
+    var score = ee.Image(1.0);
+    // Clouds are reasonably bright in the blue band.
+    score = score.min(rescale(img, 'img.blue', [0.1, 0.3]));
+  
+    // Clouds are reasonably bright in all visible bands.
+    score = score.min(rescale(img, 'img.red + img.green + img.blue', [0.2, 0.8]));
+  
+    // Clouds are reasonably bright in all infrared bands.
+    score = score.min(
+        rescale(img, 'img.nir + img.swir1 + img.swir2', [0.3, 0.8]));
+  
+    // Clouds are reasonably cool in temperature.
+    score = score.min(rescale(img, 'img.temp', [300, 290]));
+  
+    // However, clouds are not snow.
+    var ndsi = img.normalizedDifference(['green', 'swir1']);
+    return score.min(rescale(ndsi, 'img', [0.8, 0.6]));    
+  }
+  
+  app.cloudComposite = function(){
+    if(app.COLLECTION_ID == 'LANDSAT/LC8_L1T_32DAY_TOA'){
+      
+      var start_date = app.filters.startDate.getValue();
+      var end_date = app.filters.endDate.getValue();
+      
+      var LC8_BANDS = ['B2',   'B3',    'B4',  'B5',  'B6',    'B7',    'B10'];
+      var STD_NAMES = ['blue', 'green', 'red', 'nir', 'swir1', 'swir2', 'temp'];
+      
+      var cloud_collection = app.CURRENT_IMAGE = ee.ImageCollection(app.COLLECTION_ID)
+      .filterDate(start_date, end_date)
+      .map(function(img) {
+        // Invert the cloudscore so 1 is least cloudy, and rename the band.
+        var score = app.cloudScore(img.select(LC8_BANDS, STD_NAMES));
+        score = ee.Image(1).subtract(score).select([0], ['cloudscore']);
+        return img.addBands(score);
+      });
+      app.CURRENT_IMAGE = cloud_collection.qualityMosaic('cloudscore');
+      
+      Map.clear();
+      app.VIS_OPTIONS = app.vis_params();
+      var visOption = app.VIS_OPTIONS[app.vis.select.getValue()];
+      Map.addLayer(app.CURRENT_IMAGE, visOption.visParams);
+
+    } else {
+      print('Can only perform cloud composite on Landat 8 collections') 
+    }
+  }
+  /** Applies the selection filters currently selected in the UI. */
+  app.applyFilters = function() {
+    app.setLoadingMode(true);
+
+    var filtered = ee.ImageCollection(app.COLLECTION_ID);
+
+    // Filter bounds to the map if the checkbox is marked.
+    if (app.filters.mapCenter.getValue()) {
+      filtered = filtered.filterBounds(Map.getCenter());
+    }
+
+    // Set filter variables.
+    var start = app.filters.startDate.getValue();
+    if (start) start = ee.Date(start);
+    var end = app.filters.endDate.getValue();
+    if (end) end = ee.Date(end);
+    if (start) filtered = filtered.filterDate(start, end);
+
+    // Get the list of computed ids.
+    var computedIds = filtered
+        .limit(app.IMAGE_COUNT_LIMIT)
+        .reduceColumns(ee.Reducer.toList(), ['system:index'])
+        .get('list');
+
+    computedIds.evaluate(function(ids) {
+      // Update the image picker with the given list of ids.
+      app.setLoadingMode(false);
+      app.picker.select.items().reset(ids);
+      // Default the image picker to the first id.
+      app.picker.select.setValue(app.picker.select.items().get(0));
+    });
+  };
+
+  /** Refreshes the current map layer based on the UI widget states. */
+  app.refreshMapLayer = function() {
+    Map.clear();
+    app.VIS_OPTIONS = app.vis_params();
+    var imageId = app.picker.select.getValue();
+    if (imageId) {
+      // If an image id is found, create an image.
+      var image_id_full = ee.String(app.COLLECTION_ID + '/').cat(imageId).getInfo();
+      app.CURRENT_IMAGE = ee.Image(image_id_full);
+      app.manual_image.setValue(image_id_full, false);
+      // Add the image to the map with the corresponding visualization options.
+      var visOption = app.VIS_OPTIONS[app.vis.select.getValue()];
+      Map.addLayer(app.CURRENT_IMAGE, visOption.visParams, imageId);
+    }
+  };  
+};
+
+// Google chooser constants
+app.createConstants = function(collection_ID) {
+  app.COLLECTION_ID = 'LANDSAT/LC8_L1T_32DAY_TOA';
+  app.SECTION_STYLE = {margin: '20px 0 0 0'};
+  app.HELPER_TEXT_STYLE = {
+      margin: '8px 0 -3px 8px',
+      fontSize: '12px',
+      color: 'gray'
+  };
+  
+  app.IMAGE_COUNT_LIMIT = 10;
+  
+  app.HEX_CODES = [
+    'ff1111',
+    'ffa811',
+    '49ff00',
+    '00e8ff',
+    '0051ff',
+    '9b00ff',
+    'ff00d1',
+    'ff0070',
+    'ff9e00',
+    'f7ff00',
+    '00ff6c',
+    '72ccff',
+    'b0baff',
+    'ebb0ff',
+    'ffb0bc',
+    'fffbb0',
+    'b0ffc0' 
+  ];
+  
+  app.bcet_presets = {
+    'B1': {'a':false, 'b':false, 'c':false},
+    'B2': {'a':false, 'b':false, 'c':false},
+    'B3': {'a':false, 'b':false, 'c':false},
+    'B4': {'a':false, 'b':false, 'c':false},
+    'B5': {'a':false, 'b':false, 'c':false},
+    'B6': {'a':false, 'b':false, 'c':false},
+    'B7': {'a':false, 'b':false, 'c':false},
+    'B8': {'a':false, 'b':false, 'c':false},
+    'B8A': {'a':false, 'b':false, 'c':false},
+    'B9': {'a':false, 'b':false, 'c':false},
+    'B10': {'a':false, 'b':false, 'c':false},
+    'B11': {'a':false, 'b':false, 'c':false},
+    'B12': {'a':false, 'b':false, 'c':false}
+  };
+  
+  app.VIS_OPTIONS = app.vis_params();
+};
+
+app.vis_params = function(){
+  
+  var vis_options = {};
+  
+  if(app.COLLECTION_ID == 'LANDSAT/LC8_L1T_32DAY_TOA'){
+    // LANDSAT 8 PARAMETERS
+    vis_options = {
+      'Natural color (B4/B3/B2)': {
+        description: 'Ground features appear in colors similar to their ' +
+                     'appearance to the human visual system.',
+        visParams: {gamma: 1.3, min: 0, max: 0.3, bands: ['B4', 'B3', 'B2']}
+      },
+      'False color (B7/B6/B4)': {
+        description: 'Vegetation is shades of red, urban areas are ' +
+                     'cyan blue, and soils are browns.',
+        visParams: {gamma: 1.3, min: 0, max: 0.3, bands: ['B7', 'B6', 'B4']}
+      },
+      'Atmospheric (B7/B6/B5)': {
+        description: 'Coast lines and shores are well-defined. ' +
+                     'Vegetation appears blue.',
+        visParams: {gamma: 1.3, min: 0, max: 0.3, bands: ['B7', 'B6', 'B5']}
+      }
+    }; 
+  } else {
+     vis_options = {
+      'Natural color (B4/B3/B2)': {
+        description: 'Ground features appear in colors similar to their ' +
+                     'appearance to the human visual system.',
+        visParams: {gamma: 1.3, min: 0, max: 0.3, bands: ['B4', 'B3', 'B2']}
+      },
+      'False color (B7/B6/B4)': {
+        description: 'Vegetation is shades of red, urban areas are ' +
+                     'cyan blue, and soils are browns.',
+        visParams: {gamma: 1.3, min: 0, max: 0.3, bands: ['B7', 'B6', 'B4']}
+      },
+      'Atmospheric (B7/B6/B5)': {
+        description: 'Coast lines and shores are well-defined. ' +
+                     'Vegetation appears blue.',
+        visParams: {gamma: 1.3, min: 0, max: 0.3, bands: ['B7', 'B6', 'B5']}
+      }
+    // var reducers = ee.Reducer.mean().combine({
+    //   reducer2: ee.Reducer.stdDev(),
+    //   sharedInputs: true
+    // });
+    
+    // var bands = ['B1'];
+    // var stats = app.CURRENT_IMAGE.select(bands).reduceRegion({
+    //   reducer: reducers,
+    //   geometry: ee.Geometry(Map.getBounds(true)),
+    //   scale: 30,
+    //   maxPixels: 1e9
+    // });
+    
+    // var s_mean = ee.Number(stats.get('B1_mean'));
+    // var s_std = ee.Number(stats.get('B1_stdDev'));
+    
+    // var s_min = s_mean.subtract(s_std.multiply(2)).getInfo();
+    // var s_max = s_mean.add(s_std.multiply(2)).getInfo();
+    
+    // // SENTINEL IMAGE PARAMETERS
+    // vis_options = {
+    //   'Natural color (B4/B3/B2)': {
+    //     description: 'Ground features appear in colors similar to their ' +
+    //                 'appearance to the human visual system.',
+    //     visParams: {gamma: 1.3, min: s_min, max: s_max, bands: ['B4', 'B3', 'B2']}
+    //   },
+    //   'False color (B7/B6/B4)': {
+    //     description: 'Vegetation is shades of red, urban areas are ' +
+    //                 'cyan blue, and soils are browns.',
+    //     visParams: {gamma: 1.3,  min: s_min, max: s_max, bands: ['B7', 'B6', 'B4']}
+    //   },
+    //   'Atmospheric (B7/B6/B5)': {
+    //     description: 'Coast lines and shores are well-defined. ' +
+    //                 'Vegetation appears blue.',
+    //     visParams: {gamma: 1.3,  min: s_min, max: s_max, bands: ['B7', 'B6', 'B5']}
+    //   }
+    };
+  }
+  return vis_options;
+};
+  
+app.debugSettings = function(){
+  
+  if(app.debug){
+    
+    app.skip_to_point_select = true;
+    app.debug_start.panel.style().set('shown', true);
+    app.intro.panel.style().set('shown', false);
+    app.filters.panel.style().set('shown', false);
+    app.picker.panel.style().set('shown', false);
+    app.vis.panel.style().set('shown', false);
+    app.BCET.panel.style().set('shown', false);
+    app.BCETBandSelect.panel.style().set('shown', false);
+    app.regionSelect.panel.style().set('shown', false);
+    app.continueToPoint.panel.style().set('shown', false);
+    app.chartBandSelect.panel.style().set('shown', false);
+    app.pointSelect.panel.style().set('shown', false);
+    app.export.panel.style().set('shown', false);    
+    var landsat8Toa = ee.ImageCollection('LANDSAT/LC8_L1T_32DAY_TOA');
+    app.CURRENT_IMAGE = ee.Image(landsat8Toa.first());
+    app.roi = ee.Geometry.Rectangle(-116.954774, 36.231451, -116.886349, 36.185684);
+    var roi_coords = app.roi.coordinates().get(0);
+    app.roi_outline = ee.Geometry.LineString(roi_coords);
+
+    
+  } else {
+    app.debug_start.panel.style().set('shown', false);
+    app.intro.panel.style().set('shown', true);
+    app.filters.panel.style().set('shown', true);
+    app.picker.panel.style().set('shown', true);
+    app.vis.panel.style().set('shown', true);
+    app.BCET.panel.style().set('shown', false);
+    app.BCETBandSelect.panel.style().set('shown', false);
+    app.regionSelect.panel.style().set('shown', false);
+    app.continueToPoint.panel.style().set('shown', false);
+    app.chartBandSelect.panel.style().set('shown', false);
+    app.pointSelect.panel.style().set('shown', false);
+    app.export.panel.style().set('shown', false);
+    app.roi = false;
+  }
+};
+
+app.debug_post_setup = function(){
+  if(app.debug){
+    if(app.skip_to_point_select){
+      app.BCETRegion();
+    }
+  }
+};
+
+app.boot = function(){
+  // DEBUG ROUTINE
+  app.debug = false;
+  
+  app.createConstants();
+  app.createHelpers();
+  app.createInputs();
+  app.createPanels();
+  app.debugSettings();
+  
+  var main = ui.Panel({
+    widgets: [
+      app.debug_start.panel,
+      app.intro.panel,
+      app.filters.panel,
+      app.picker.panel,
+      app.vis.panel,
+      app.regionSelect.panel,
+      app.BCET.panel,
+      app.BCETBandSelect.panel,
+      app.continueToPoint.panel,
+      app.chartBandSelect.panel,
+      app.pointSelect.panel,
+      app.export.panel
+    ],
+    style: {width: '600px', padding: '8px'}
+  });
+
+  // Default to Death Valley
+  Map.setCenter(-116.886349,  36.185684, 10);
+  ui.root.insert(0, main);
+  app.applyFilters();
+  
+};
+
+app.boot();
+
+
+
