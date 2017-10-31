@@ -1,5 +1,5 @@
 
-// Spectral Point Collector v0.3
+// Spectral Point Collector v0.4
 // A UI for to BCET Landsat data and to collect
 // spectral signatures for multiple point locations
 // Copyright (C) 2017 Sam Brooke
@@ -235,32 +235,38 @@ app.pointListenId = false;
 app.hex_counter = 0;
 app.colorList = {};
 app.bandChart = false;
+app.pointListening = false;
 
 app.pointMapListen = function(){
-  
-  if(!app.pointerIds){
-   var r = confirm("Do you want to clear the map?");
-  
-    if (r == 1) {
-      app.clearLayerAssets(app.pointerIds);
-      app.pointerIds = [];
-      app.coordData = {};
-    }
-  }
-  
-  Map.style().set('cursor', 'crosshair');
-
-  app.pointListenId = Map.onClick(function(coords) {
+  if(!app.pointListening){
+    app.pointListening = true;
     
-    app.createPoint(coords, false);
-  });
+    if(!app.pointerIds){
+     var r = confirm("Do you want to clear the map?");
+    
+      if (r == 1) {
+        app.clearLayerAssets(app.pointerIds);
+        app.pointerIds = [];
+        app.coordData = {};
+      }
+    }
+    
+    Map.style().set('cursor', 'crosshair');
+  
+    app.pointListenId = Map.onClick(function(coords) {
+      app.createPoint(coords, false);
+    });
+  }
 };
 
 app.pointMapUnlisten = function(){
-  if(app.pointListenId){
-    Map.unlisten(app.pointListenId);
-    app.pointListenId = false;
-    Map.style().set('cursor', 'hand');
+  if(app.pointListening){
+    app.pointListening = false;
+    if(app.pointListenId){
+      Map.unlisten(app.pointListenId);
+      app.pointListenId = false;
+      Map.style().set('cursor', 'hand');
+    }
   }
 };
 
@@ -345,7 +351,7 @@ app.setBandChart = function(marker_ids){
     }
     
     var imageBands = app.CURRENT_IMAGE.select(app.BCET_CHART_BANDS);
-  
+    print(imageBands)
     app.bandChart = ui.Chart.image.regions({
       image: imageBands,
       regions: bandPoints,
@@ -354,13 +360,22 @@ app.setBandChart = function(marker_ids){
     });
     
     app.bandChart.setChartType('LineChart');
+    
+    if(app.BCETskipped){
+      var chartTitle = 'Reflectance';
+      var chartY = 'R';
+    } else {
+      var chartTitle = 'BCET Reflectance';
+      var chartY = 'R*';
+    }
+    
     app.bandChart.setOptions({
-      title: 'BCET Reflectance',
+      title: chartTitle,
       hAxis: {
         title: 'Band'
       },
       vAxis: {
-        title: 'Reflectance'
+        title: chartY
       },
       lineWidth: 1,
       pointSize: 4,
@@ -474,14 +489,63 @@ app.exportCoords = function(){
   }
 };
 
-app.BCETRegion = function(){
+app.exportFusionTable = function(){
+  var fusion_id = app.fusion_table_id.getValue();
+  var points = [];
+  
+  if(fusion_id){
+    var fid_protocol = ee.String('ft:').cat(fusion_id).getInfo();
+    var fusion_data = ee.FeatureCollection(fid_protocol);
+      
+    var names = fusion_data.aggregate_array('Name').getInfo();
+    var cc = fusion_data.geometry().coordinates();
+    var g = cc.length().getInfo();
+    for(var i = 0; i < g; i++){
+      var latlon = cc.get(i).getInfo();
+      var point = ee.Feature(ee.Geometry.Point(latlon[0], latlon[1]), {label: names[i]});
+      points.push(point);
+    }
+    var bandPoints = ee.FeatureCollection(points);
+    
+    var ft = ee.FeatureCollection(ee.List([]));
+
+    var fill = function(img, ini) {
+      // type cast
+      var inift = ee.FeatureCollection(ini);
+      // gets the values for the points in the current img
+      var ft2 = img.reduceRegions({
+        collection:bandPoints,
+        reducer:ee.Reducer.first(),
+        crs: 'EPSG:4326',
+        crsTransform: [0.00025,0,0,0,-0.00025,0]
+      });
+      return inift.merge(ft2);
+    };
+  
+    var fid = guid();
+    var fileName = [fid,app.project_variables.title].join('_');
+  
+    var res = fill(app.CURRENT_IMAGE.select(app.BCET_CHART_BANDS), ft);
+  
+    Export.table.toDrive({
+      collection:res,
+      description: [fid,'Reflectance',app.project_variables.title].join('_'),
+      fileNamePrefix: fileName, 
+      fileFormat: 'CSV'
+    });
+  }
+};
+
+app.BCETRegion = function(skip){
   app.regionSelect.panel.style().set('shown', false);
   app.BCETBandSelect.panel.style().set('shown', true);
+  app.BCETskipped = skip;
   
   var collection_params = app.COLLECTION_ID.split('/');
   
   if(collection_params[0] == 'LANDSAT'){
     var bandNames = ee.List(['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7']);
+    var allBands = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11'];
   } else {
     // SENTINEL BANDS
     var bandNames = ee.List(['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7',
@@ -490,132 +554,140 @@ app.BCETRegion = function(){
   
   var box = app.roi;
   
-  if(box){
-    var reducers = ee.Reducer.mean().combine({
-      reducer2: ee.Reducer.minMax(),
-      sharedInputs: true
-    });
-    
-    var stats = app.CURRENT_IMAGE.reduceRegion({
-      reducer: reducers,
-      geometry: box,
-      crs: 'EPSG:4326',
-      crsTransform: [0.00025,0,0,0,-0.00025,0],
-      bestEffort:true
-    });
-    
-    var pow2 = app.CURRENT_IMAGE.pow(2);
-    
-    var s_values = pow2.reduceRegion({
-      reducer: ee.Reducer.mean(),
-      geometry: box,
-      crs: 'EPSG:4326',
-      crsTransform: [0.00025,0,0,0,-0.00025,0],
-      bestEffort:true
-    });
-    
+  if(skip){
+    app.BCET_BANDS = allBands;
+    app.BCETvisParams = {
+      bands: ['B5', 'B4', 'B3'],
+    };
   } else {
-    var reducers = ee.Reducer.mean().combine({
-      reducer2: ee.Reducer.minMax(),
-      sharedInputs: true
-    });
     
-    var stats = app.CURRENT_IMAGE.reduceRegion({
-      reducer: reducers,
-      crs: 'EPSG:4326',
-      crsTransform: [0.00025,0,0,0,-0.00025,0],
-      bestEffort:true
-    });
-    
-    var pow2 = app.CURRENT_IMAGE.pow(2);
-    
-    var s_values = pow2.reduceRegion({
-      reducer: ee.Reducer.mean(),
-      crs: 'EPSG:4326',
-      crsTransform: [0.00025,0,0,0,-0.00025,0],
-      bestEffort:true
-    });   
-  }
-    
-  
-  // BCET values
-  var L =  ee.Number(0); // minimum
-  var H =  ee.Number(255); // maximum
-  var E =  ee.Number(110); // mean
-  
-  var i = 0;
-  //var len = bandNames.length().getInfo();
-  var len = bandNames.length().getInfo();
-
-  app.BCET_BANDS = [];
-
-  for (i = 0; i < len; i++) {
-    var band_name = bandNames.get(i).getInfo();
-    
-    var band = app.CURRENT_IMAGE.select(band_name);
-    
-    var params = app.bcet_presets[band_name];
-    
-    if(params.a === false){
+    if(box){
+      var reducers = ee.Reducer.mean().combine({
+        reducer2: ee.Reducer.minMax(),
+        sharedInputs: true
+      });
       
-      var l = ee.Number(stats.get(band_name.concat('_min')));
-      var h = ee.Number(stats.get(band_name.concat('_max')));
-      var e = ee.Number(stats.get(band_name.concat('_mean')));
-      var s = ee.Number(s_values.get(band_name));
+      var stats = app.CURRENT_IMAGE.reduceRegion({
+        reducer: reducers,
+        geometry: box,
+        crs: 'EPSG:4326',
+        crsTransform: [0.00025,0,0,0,-0.00025,0],
+        bestEffort:true
+      });
       
-      var b_nom = h.pow(2).multiply(E.subtract(L)).subtract(s.multiply(H.subtract(L))).add(l.pow(2).multiply(H.subtract(E)));
-      var b_den = ee.Number(2).multiply(h.multiply(E.subtract(L)).subtract(e.multiply(H.subtract(L))).add(l.multiply(H.subtract(E))));
-      var b = b_nom.divide(b_den);
+      var pow2 = app.CURRENT_IMAGE.pow(2);
       
-      var a1 = H.subtract(L);
-      var a2 = h.subtract(l);
-      var a3 = h.add(l).subtract(ee.Number(2).multiply(b));
-      
-      var a = a1.divide(a2.multiply(a3));
-      
-      var c = L.subtract(a.multiply(l.subtract(b).pow(2)));
+      var s_values = pow2.reduceRegion({
+        reducer: ee.Reducer.mean(),
+        geometry: box,
+        crs: 'EPSG:4326',
+        crsTransform: [0.00025,0,0,0,-0.00025,0],
+        bestEffort:true
+      });
       
     } else {
-      var a = params.a;
-      var b = params.b;
-      var c = params.c;
+      var reducers = ee.Reducer.mean().combine({
+        reducer2: ee.Reducer.minMax(),
+        sharedInputs: true
+      });
+      
+      var stats = app.CURRENT_IMAGE.reduceRegion({
+        reducer: reducers,
+        crs: 'EPSG:4326',
+        crsTransform: [0.00025,0,0,0,-0.00025,0],
+        bestEffort:true
+      });
+      
+      var pow2 = app.CURRENT_IMAGE.pow(2);
+      
+      var s_values = pow2.reduceRegion({
+        reducer: ee.Reducer.mean(),
+        crs: 'EPSG:4326',
+        crsTransform: [0.00025,0,0,0,-0.00025,0],
+        bestEffort:true
+      });   
+    }
+      
+    
+    // BCET values
+    var L =  ee.Number(0); // minimum
+    var H =  ee.Number(255); // maximum
+    var E =  ee.Number(110); // mean
+    
+    var i = 0;
+    //var len = bandNames.length().getInfo();
+    var len = bandNames.length().getInfo();
+  
+    app.BCET_BANDS = [];
+  
+    for (i = 0; i < len; i++) {
+      var band_name = bandNames.get(i).getInfo();
+      
+      var band = app.CURRENT_IMAGE.select(band_name);
+      
+      var params = app.bcet_presets[band_name];
+      
+      if(params.a === false){
+        
+        var l = ee.Number(stats.get(band_name.concat('_min')));
+        var h = ee.Number(stats.get(band_name.concat('_max')));
+        var e = ee.Number(stats.get(band_name.concat('_mean')));
+        var s = ee.Number(s_values.get(band_name));
+        
+        var b_nom = h.pow(2).multiply(E.subtract(L)).subtract(s.multiply(H.subtract(L))).add(l.pow(2).multiply(H.subtract(E)));
+        var b_den = ee.Number(2).multiply(h.multiply(E.subtract(L)).subtract(e.multiply(H.subtract(L))).add(l.multiply(H.subtract(E))));
+        var b = b_nom.divide(b_den);
+        
+        var a1 = H.subtract(L);
+        var a2 = h.subtract(l);
+        var a3 = h.add(l).subtract(ee.Number(2).multiply(b));
+        
+        var a = a1.divide(a2.multiply(a3));
+        
+        var c = L.subtract(a.multiply(l.subtract(b).pow(2)));
+        
+      } else {
+        var a = params.a;
+        var b = params.b;
+        var c = params.c;
+      }
+      
+      var y = app.CURRENT_IMAGE.expression(
+        'a * (x - b)**2 + c', {
+        'a': a,
+        'b': b,
+        'c': c,
+        'x': app.CURRENT_IMAGE.select(band_name)
+      });
+      
+      var y_r = y.select(
+          ['constant',], // old names
+          [band_name.concat('_BCET')] // new names
+      );
+      
+      app.BCET_BANDS.push(band_name.concat('_BCET'));
+      
+      app.CURRENT_IMAGE = app.CURRENT_IMAGE.addBands(y_r, [band_name.concat('_BCET')]);
     }
     
-    var y = app.CURRENT_IMAGE.expression(
-      'a * (x - b)**2 + c', {
-      'a': a,
-      'b': b,
-      'c': c,
-      'x': app.CURRENT_IMAGE.select(band_name)
+    app.BCETvisParams = {
+      bands: ['B5_BCET', 'B4_BCET', 'B3_BCET'],
+      min: 0,
+      max: 255,
+      gamma: [0.95, 1.1, 1]
+    };
+  
+    var mean_check = app.CURRENT_IMAGE.select(app.BCET_BANDS).reduceRegion({
+      reducer: ee.Reducer.mean(),
+      geometry: box,
+      crs: 'EPSG:4326',
+      crsTransform: [0.00025,0,0,0,-0.00025,0],
+      bestEffort:true
     });
     
-    var y_r = y.select(
-        ['constant',], // old names
-        [band_name.concat('_BCET')] // new names
-    );
-    
-    app.BCET_BANDS.push(band_name.concat('_BCET'));
-    
-    app.CURRENT_IMAGE = app.CURRENT_IMAGE.addBands(y_r, [band_name.concat('_BCET')]);
+    print('BCET mean values...');
+    print(mean_check);
   }
-  
-  app.BCETvisParams = {
-    bands: ['B5_BCET', 'B4_BCET', 'B3_BCET'],
-    min: 0,
-    max: 255,
-    gamma: [0.95, 1.1, 1]
-  };
-
-  var mean_check = app.CURRENT_IMAGE.select(app.BCET_BANDS).reduceRegion({
-    reducer: ee.Reducer.mean(),
-    geometry: box,
-    crs: 'EPSG:4326',
-    crsTransform: [0.00025,0,0,0,-0.00025,0],
-    bestEffort:true
-  });
-  
-  print('BCET mean values...');
-  print(mean_check);
   
   Map.clear();
   Map.addLayer(app.CURRENT_IMAGE, app.BCETvisParams);
@@ -626,7 +698,11 @@ app.BCETRegion = function(){
   
   app.centerRegion();
   app.BCETBandSelect.panel.clear();
-  app.BCETBandSelectInputs();
+  if(skip){
+    app.BandSelectInputs();
+  } else {
+    app.BCETBandSelectInputs();
+  }
   app.continueToPoint.panel.style().set('shown', true);
 };
 
@@ -637,16 +713,25 @@ app.refreshBCETLayer = function(){
   var G = app.BCET_G.getValue();
   var B = app.BCET_B.getValue();
   
-  app.BCETvisParams = {
-    bands: [R, G, B],
-    min: 0,
-    max: 255,
-    gamma: [0.95, 1.1, 1]
-  };
+  if(app.BCETskipped){
+    app.BCETvisParams = {
+      bands: [R, G, B]
+    };    
+  } else {
+    app.BCETvisParams = {
+      bands: [R, G, B],
+      min: 0,
+      max: 255,
+      gamma: [0.95, 1.1, 1]
+    };  
+  } 
+
+  
   Map.clear();
   Map.addLayer(app.CURRENT_IMAGE, app.BCETvisParams);
-  Map.addLayer(app.roi_outline, {color: 'FFFFFF'}, 'roi_outline');
-
+  if(app.roi_outline){
+    Map.addLayer(app.roi_outline, {color: 'FFFFFF'}, 'roi_outline');
+  }
 };
 
 app.pointSetup = function(){
@@ -711,6 +796,10 @@ app.createPanels = function() {
       }),
       ui.Label('A UI select a region, BCET and grab'+
               ' spectral signatures for multiple point locations'),
+      ui.Label({
+        value:'Author: Sam Brooke (sbrooke@tuta.io, sambrooke.uk)',
+        style: {fontSize: '12px'}
+      }),
       app.project_name_input
     ])
   };
@@ -727,16 +816,23 @@ app.createPanels = function() {
       style: {stretch: 'vertical', color: 'gray', shown: false}
     })
   };
-
+  
+  app.collection_picker = ui.Select({
+    items: app.LANDSAT_COLLECTIONS,
+    value: 'LANDSAT/LC8_L1T_32DAY_TOA', /* Default */
+    onChange: app.selectCollection
+  });
+  
   /* The panel for the filter control widgets. */
   app.filters.panel = ui.Panel({
     widgets: [
-      ui.Label('Select Location', {fontWeight: 'bold'}),
+      ui.Label('Select Dataset', {fontWeight: 'bold'}),
       ui.Select({
         items: ['Landsat 8', 'Sentinel 2'],
         value:'Landsat 8',
         onChange: app.selectDataset
       }),
+      app.collection_picker,
       ui.Label('Pan and zoom map to area'),
       ui.Label('Start date', app.HELPER_TEXT_STYLE), app.filters.startDate,
       ui.Label('End date', app.HELPER_TEXT_STYLE), app.filters.endDate,
@@ -850,9 +946,10 @@ app.createPanels = function() {
           fontSize: '18px'
         }
       }),
+      ui.Label('Select option above to set ROI or input decimal coordinates manually below'),
       app.position_inputs.panel,
       ui.Button({
-        label: 'Set region from manual coordinates', 
+        label: 'Create region from manual coordinates above', 
         onClick: app.setRegion, 
         style: {
           stretch:'horizontal'
@@ -865,8 +962,12 @@ app.createPanels = function() {
           stretch:'horizontal'
         }
       }),
+      ui.Label({
+        value: 'Next',
+        style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}
+      }),
       ui.Button({
-        label: 'Next', 
+        label: 'Continue to contrast enhancement', 
         onClick: app.BCET_Region_init, 
         style: {
           stretch:'horizontal'
@@ -884,7 +985,21 @@ app.createPanels = function() {
       ui.Label('BCET region of interest (after Liu et al. 1994)'),
       ui.Button({
         label: 'BCET Region', 
-        onClick: app.BCETRegion, 
+        onClick: function(){
+          var skip = false;
+          app.BCETRegion(skip); 
+        },
+        style: {
+          stretch:'horizontal',
+          fontSize: '18px'
+        }
+      }),
+      ui.Button({
+        label: 'Skip', 
+        onClick: function(){
+          var skip = true;
+          app.BCETRegion(skip); 
+        }, 
         style: {
           stretch:'horizontal',
           fontSize: '18px'
@@ -893,13 +1008,73 @@ app.createPanels = function() {
     ])
   };
   
-  app.BCETBandSelectInputs = function(){
-    print(app.BCET_BANDS)
+  app.BandSelectInputs = function(){
     var widgets = [
       ui.Label({
           value: 'Select Bands:',
           style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}
-      }),
+      })
+    ];
+    
+    // Legacy code, when skipping BCET, still using BCET prefixes for variables
+    
+    app.BCET_R = ui.Select({
+        items: app.BCET_BANDS,
+        value: 'B5',
+        placeholder: 'R',
+        onChange: function() {
+          app.refreshBCETLayer();
+        }
+    });
+    
+    app.BCET_G = ui.Select({
+        items: app.BCET_BANDS,
+        value: 'B4',
+        placeholder: 'G',
+        onChange: function() {
+          app.refreshBCETLayer();
+        }
+    });
+    
+    app.BCET_B = ui.Select({
+        items: app.BCET_BANDS,
+        value: 'B3',
+        placeholder: 'B',
+        onChange: function() {
+          app.refreshBCETLayer();
+        }
+    });
+    
+    widgets.push(ui.Label({value: 'R', style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}}));
+    widgets.push(app.BCET_R);
+    widgets.push(ui.Label({value: 'G', style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}}));
+    widgets.push(app.BCET_G);
+    widgets.push(ui.Label({value: 'B', style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}}));
+    widgets.push(app.BCET_B);
+    
+    widgets.push(
+      ui.Button({
+        label: 'Export Tif', 
+        onClick: app.exportRegion, 
+        style: {
+          stretch:'horizontal',
+          fontSize: '18px'
+        }
+      })      
+    );
+    
+    for(var i = 0; i < widgets.length; i++){
+       app.BCETBandSelect.panel.add(widgets[i]);
+    }
+  };
+  
+  app.BCETBandSelectInputs = function(){
+    
+    var widgets = [
+      ui.Label({
+          value: 'Select Bands:',
+          style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}
+      })
     ];
     
     app.BCET_R = ui.Select({
@@ -974,12 +1149,46 @@ app.createPanels = function() {
     }
   };
   
+  app.edgeDetectLayer = function(){
+    
+    app.clearLayerAssets(['KirschFilter']);
+    
+    var kirsch_r0 = ee.Kernel.kirsch();
+    var kirsch_r1 = kirsch_r0.rotate(1);
+    var kirsch_r2 = kirsch_r0.rotate(2);
+    var kirsch_r3 = kirsch_r0.rotate(3);
+    
+    // Make 45 degree Kirsch kernel
+    var k45_top = [5, 5, -3];
+    var k45_mid = [5, 0, -3];
+    var k45_bot = [-3, -3, -3];
+    var k45 = [k45_top, k45_mid, k45_bot];
+    var kirch45_r0 = ee.Kernel.fixed(3,3,k45);
+    var kirch45_r1 = kirch45_r0.rotate(1);
+    var kirch45_r2 = kirch45_r0.rotate(2);
+    var kirch45_r3 = kirch45_r0.rotate(3);
+    
+    var k_kernels = [kirsch_r0, kirsch_r1, kirsch_r2, kirsch_r3, kirch45_r0, kirch45_r1, kirch45_r2, kirch45_r3];
+    var k_images = [];
+    
+    for(var i = 0; i < k_kernels.length; i++){
+      k_images.push(app.CURRENT_IMAGE.select(['B1','B2', 'B3', 'B4', 'B5', 'B6', 'B7','B10']).convolve(k_kernels[i]));
+    }
+    
+    var k_collection = ee.ImageCollection(k_images);
+    var vr = k_collection.reduce(ee.Reducer.max());
+    var k_thresh = vr.gt(app.thresholdSlider.getValue());
+    
+    Map.addLayer(k_thresh, false, 'KirschFilter', true, 0.3);    
+  };
+  
   app.BCETBandSelect = {
     panel: ui.Panel([ui.Label('Processing BCET...')], ui.Panel.Layout.flow('horizontal'))
   };
   
   app.continueToPoint = {
     panel: ui.Panel([
+      ui.Label('Choose bands for RGB viewing and point selection'),
       ui.Button({
         label: 'Continue to point selection', 
         onClick: app.pointSetup, 
@@ -1046,8 +1255,16 @@ app.createPanels = function() {
   });
   
   var loadFusionTableBtn = ui.Button({
-    label: 'Load', 
+    label: 'Plot', 
     onClick: app.loadFusionTable,
+    style: {
+      fontSize: '16px'
+    }
+  });
+  
+  var exportFusionTableValuesBtn = ui.Button({
+    label: 'Export Values Only',
+    onClick: app.exportFusionTable,
     style: {
       fontSize: '16px'
     }
@@ -1055,11 +1272,38 @@ app.createPanels = function() {
   
   app.fusionTableForm = ui.Panel([
     app.fusion_table_id,
-    loadFusionTableBtn
+    loadFusionTableBtn,
+    exportFusionTableValuesBtn
     ],ui.Panel.Layout.flow('horizontal'));
   
+  app.thresholdSlider = ui.Slider({
+    min: 0,
+    max: 1,
+    value: 0.5,
+    step: 0.1,
+    onChange: app.edgeDetectLayer,
+    style: {stretch: 'horizontal'}
+  });
+  
+  app.edgeDetectPanel = ui.Panel([
+    ui.Button({
+      label: 'Kirsch Filter',
+      onClick: app.edgeDetectLayer,
+      style: {
+        stretch:'horizontal'
+      }
+    }),
+    app.thresholdSlider,
+    ],ui.Panel.Layout.flow('horizontal'));
+    
   app.pointSelect = {
     panel: ui.Panel([
+      ui.Label({
+        value: 'Edge Detect',
+        style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}
+      }),
+      app.edgeDetectPanel,
+      ui.Label('Add a semi-transparent layer that highlights areas with higher constract gradients. These areas may be problematic for reliable point selection'),
       ui.Label({
         value: 'Points',
         style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}
@@ -1072,6 +1316,7 @@ app.createPanels = function() {
           stretch:'horizontal'
         }
       }),
+      ui.Label('Choose query points by clicking on map'),
       ui.Button({
         label: 'Pan Mode', 
         onClick: app.pointMapUnlisten, 
@@ -1079,7 +1324,16 @@ app.createPanels = function() {
           stretch:'horizontal'
         }
       }),
+      ui.Label('Return to map exploration mode'),
+      ui.Label({
+        value: 'Add Points Manually',
+        style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}
+      }),
       app.manualCoordForm,
+      ui.Label({
+        value: 'Import points from Fusion Table',
+        style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}
+      }),
       app.fusionTableForm
     ])
   };
@@ -1128,11 +1382,18 @@ app.createPanels = function() {
   };
 };
 
+app.selectCollection = function(collection){
+    if(collection){
+      app.COLLECTION_ID = collection;
+    }
+};
+
 app.selectDataset = function(dataset){
   if(dataset == 'Landsat 8'){
-    app.COLLECTION_ID = 'LANDSAT/LC8_L1T_32DAY_TOA';
+    app.collection_picker.items().reset(app.LANDSAT_COLLECTIONS);
   } else if(dataset == 'Sentinel 2'){
     app.COLLECTION_ID = 'COPERNICUS/S2';
+    app.collection_picker.items().reset(['COPERNICUS/S2']);
   }
   app.applyFilters();
 };
@@ -1183,10 +1444,10 @@ app.createHelpers = function() {
     // However, clouds are not snow.
     var ndsi = img.normalizedDifference(['green', 'swir1']);
     return score.min(rescale(ndsi, 'img', [0.8, 0.6]));    
-  }
+  };
   
   app.cloudComposite = function(){
-    if(app.COLLECTION_ID == 'LANDSAT/LC8_L1T_32DAY_TOA'){
+    if(app.COLLECTION_ID.slice(0, 7) == 'LANDSAT'){
       
       var start_date = app.filters.startDate.getValue();
       var end_date = app.filters.endDate.getValue();
@@ -1210,9 +1471,10 @@ app.createHelpers = function() {
       Map.addLayer(app.CURRENT_IMAGE, visOption.visParams);
 
     } else {
-      print('Can only perform cloud composite on Landat 8 collections') 
+      print('Can only perform cloud composite on Landat 8 collections');
     }
-  }
+  };
+  
   /** Applies the selection filters currently selected in the UI. */
   app.applyFilters = function() {
     app.setLoadingMode(true);
@@ -1265,6 +1527,10 @@ app.createHelpers = function() {
 
 // Google chooser constants
 app.createConstants = function(collection_ID) {
+  app.LANDSAT_COLLECTIONS = [
+      'LANDSAT/LC8_L1T_32DAY_TOA',
+      'LANDSAT/LC8_L1T_8DAY_TOA',
+    ];
   app.COLLECTION_ID = 'LANDSAT/LC8_L1T_32DAY_TOA';
   app.SECTION_STYLE = {margin: '20px 0 0 0'};
   app.HELPER_TEXT_STYLE = {
@@ -1318,7 +1584,7 @@ app.vis_params = function(){
   
   var vis_options = {};
   
-  if(app.COLLECTION_ID == 'LANDSAT/LC8_L1T_32DAY_TOA'){
+  if(app.COLLECTION_ID.slice(0, 7) == 'LANDSAT'){
     // LANDSAT 8 PARAMETERS
     vis_options = {
       'Natural color (B4/B3/B2)': {
@@ -1414,7 +1680,7 @@ app.debugSettings = function(){
     app.export.panel.style().set('shown', false);    
     var landsat8Toa = ee.ImageCollection('LANDSAT/LC8_L1T_32DAY_TOA');
     app.CURRENT_IMAGE = ee.Image(landsat8Toa.first());
-    app.roi = ee.Geometry.Rectangle(-116.954774, 36.231451, -116.886349, 36.185684);
+    app.roi = ee.Geometry.Rectangle(-118.457336, 38.011311, -116.542969, 37.037639);
     var roi_coords = app.roi.coordinates().get(0);
     app.roi_outline = ee.Geometry.LineString(roi_coords);
 
@@ -1439,7 +1705,7 @@ app.debugSettings = function(){
 app.debug_post_setup = function(){
   if(app.debug){
     if(app.skip_to_point_select){
-      app.BCETRegion();
+      app.BCETRegion(false);
     }
   }
 };
@@ -1480,6 +1746,3 @@ app.boot = function(){
 };
 
 app.boot();
-
-
-
