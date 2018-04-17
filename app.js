@@ -1,5 +1,5 @@
 
-// Spectral Point Collector v0.4
+// Spectral Point v0.5
 // A UI for to BCET Landsat data and to collect
 // spectral signatures for multiple point locations
 // Copyright (C) 2017 Sam Brooke
@@ -69,17 +69,13 @@ app.selectRegion = function() {
         
         Map.addLayer(point, {color: 'FF0000'}, 'regionBottomRight');
         
-        var yMax = topLeft.coordinates().get(1).getInfo();
-        var yMin = bottomRight.coordinates().get(1).getInfo();
-        var xMax = topLeft.coordinates().get(0).getInfo();
-        var xMin = bottomRight.coordinates().get(0).getInfo();
+        var yMax = ee.Number(topLeft.coordinates().get(1));
+        var yMin = ee.Number(bottomRight.coordinates().get(1));
+        var xMax = ee.Number(topLeft.coordinates().get(0));
+        var xMin = ee.Number(bottomRight.coordinates().get(0));
         
-        app.top_left_lat.setValue(yMax, false);
-        app.bottom_right_lat.setValue(yMin, false);
-        app.top_left_lon.setValue(xMax, false);
-        app.bottom_right_lon.setValue(xMin, false);
         
-        var region_bounds = [xMin, yMin, xMax, yMax];
+        var region_bounds = [xMax, yMin, xMin, yMax];
         
         app.project_variables.region_bounds = region_bounds;
         app.roi = ee.Geometry.Rectangle(region_bounds);
@@ -88,6 +84,12 @@ app.selectRegion = function() {
         
         Map.addLayer(app.roi, {color: 'FF0000'}, 'regionRectangle');
         Map.unlisten(listenerId);
+        
+        app.top_left_lat.setValue(yMax.getInfo(), false);
+        app.bottom_right_lat.setValue(yMin.getInfo(), false);
+        app.top_left_lon.setValue(xMax.getInfo(), false);
+        app.bottom_right_lon.setValue(xMin.getInfo(), false);
+        
       } else {
         Map.addLayer(point, {color: 'FF0000'}, 'regionTopLeft');
       }
@@ -160,6 +162,7 @@ app.createInputs = function(){
       width: '50px'
     }
   });
+  
   app.top_left_lon = ui.Textbox({
     placeholder: 'Lon',
     style: {
@@ -287,17 +290,24 @@ app.centreMarker = function(marker_id){
 };
 
 app.updateVisibleBands = function(){
-  app.BCET_CHART_BANDS = [];
+  app.CHART_BANDS = [];
   for (var i = 0; i < app.BCET_BANDS.length; i++) {
     var input_name = app.BCET_BANDS[i]+'_visible';
     if (app[input_name].getValue()){
-      app.BCET_CHART_BANDS.push(app.BCET_BANDS[i]);
+      app.CHART_BANDS.push(app.BCET_BANDS[i]);
+    }
+  }
+  for (var i = 0; i < app.PCA_BANDS.length; i++) {
+    var input_name = app.PCA_BANDS[i]+'_visible';
+    if (app[input_name].getValue()){
+      app.CHART_BANDS.push(app.PCA_BANDS[i]);
     }
   }
   app.setBandChart(app.pointerIds);
 };
 
 app.visibleBandSelect = function(){
+  
   for (var i = 0; i < app.BCET_BANDS.length; i++) {
     var input_name = app.BCET_BANDS[i]+'_visible';
     app[input_name] = ui.Checkbox({
@@ -307,6 +317,17 @@ app.visibleBandSelect = function(){
     });
     app.chartBandSelect.panel.add(app[input_name]);
   }
+  
+  for (var i = 0; i < app.PCA_BANDS.length; i++){
+    var input_name = app.PCA_BANDS[i]+'_visible';
+    app[input_name] = ui.Checkbox({
+      label: app.PCA_BANDS[i],
+      value: true,
+      onChange: app.updateVisibleBands
+    });
+    app.chartBandSelect.panel.add(app[input_name]);  
+  }
+  
   app.setBandChart(app.pointerIds);
   app.showHideChartBandBtn = ui.Button({
     label: 'Hide', 
@@ -324,7 +345,21 @@ app.visibleBandSelect = function(){
           }
           app[input_name].style().set('shown', true);
         }
-      }     
+      }    
+      for (var i = 0; i < app.PCA_BANDS.length; i++) {
+        var input_name = app.PCA_BANDS[i]+'_visible';
+        if (app[input_name].style().get('shown')){
+          if(i === 0){
+            app.showHideChartBandBtn.set('label', 'Show');
+          }
+          app[input_name].style().set('shown', false);
+        } else {
+          if(i === 0){
+            app.showHideChartBandBtn.set('label', 'Hide');
+          }
+          app[input_name].style().set('shown', true);
+        }
+      }
     },
     style: {
       stretch:'horizontal',
@@ -335,7 +370,7 @@ app.visibleBandSelect = function(){
 };
 
 app.setBandChart = function(marker_ids){
-  if(app.BCET_CHART_BANDS && (marker_ids.length > 0)){
+  if(app.CHART_BANDS && (marker_ids.length > 0)){
     var points = [];
     var plot_series = {};
     
@@ -350,8 +385,8 @@ app.setBandChart = function(marker_ids){
       app.coordMasterPanel.remove(app.bandChart);
     }
     
-    var imageBands = app.CURRENT_IMAGE.select(app.BCET_CHART_BANDS);
-    print(imageBands)
+    var imageBands = app.CURRENT_IMAGE.select(app.CHART_BANDS);
+
     app.bandChart = ui.Chart.image.regions({
       image: imageBands,
       regions: bandPoints,
@@ -362,10 +397,10 @@ app.setBandChart = function(marker_ids){
     app.bandChart.setChartType('LineChart');
     
     if(app.BCETskipped){
-      var chartTitle = 'Reflectance';
+      var chartTitle = 'Pixel Values';
       var chartY = 'R';
     } else {
-      var chartTitle = 'BCET Reflectance';
+      var chartTitle = 'Pixel Values';
       var chartY = 'R*';
     }
     
@@ -459,13 +494,9 @@ app.createPoint = function(coords, sample_name_original){
 
 app.addManualCoord = function(){
   var gid = guid();
-  // var coords = {
-  //   lon: ee.Number.parse(app.lon_input.getValue()).getInfo(), 
-  //   lat: ee.Number.parse(app.lat_input.getValue()).getInfo()
-  // };
   var coord_vals = [ee.Number.parse(app.lon_input.getValue()), ee.Number.parse(app.lat_input.getValue())];
   var coords = ee.Dictionary(['lon', 'lat'], coord_vals);
-  var sample_name = app.sample_input.getValue().getInfo;
+  var sample_name = ee.String(app.sample_input.getValue());
   app.createPoint(coords, sample_name);
 };
 
@@ -481,7 +512,7 @@ app.exportCoords = function(){
     var fid = guid();
     var fileName = [fid,app.project_variables.title].join('_');
     Export.table.toDrive({
-      collection:bandPoints,
+      collection: bandPoints,
       description: [fid,'Coordinates',app.project_variables.title].join('_'),
       fileNamePrefix: fileName, 
       fileFormat: 'KMZ'
@@ -494,17 +525,27 @@ app.exportFusionTable = function(){
   var points = [];
   
   if(fusion_id){
-    var fid_protocol = ee.String('ft:').cat(fusion_id).getInfo();
+    var fid_protocol = ee.String('ft:').cat(fusion_id);
     var fusion_data = ee.FeatureCollection(fid_protocol);
       
-    var names = fusion_data.aggregate_array('Name').getInfo();
+    var names = ee.List(fusion_data.aggregate_array('name'));
     var cc = fusion_data.geometry().coordinates();
-    var g = cc.length().getInfo();
-    for(var i = 0; i < g; i++){
-      var latlon = cc.get(i).getInfo();
-      var point = ee.Feature(ee.Geometry.Point(latlon[0], latlon[1]), {label: names[i]});
-      points.push(point);
-    }
+    
+    print('Names');
+    print(names);
+    print('Coords');
+    print(cc);
+    
+    var getLatLon = function(n){
+      var latlon = ee.List(cc.get(n));
+      var name = names.get(n);
+      return ee.Feature(ee.Geometry.Point(latlon), {label: name});
+    };
+    
+    var seq = ee.List.sequence(0, cc.length().subtract(1));
+
+    var points = seq.map(getLatLon);
+
     var bandPoints = ee.FeatureCollection(points);
     
     var ft = ee.FeatureCollection(ee.List([]));
@@ -525,11 +566,14 @@ app.exportFusionTable = function(){
     var fid = guid();
     var fileName = [fid,app.project_variables.title].join('_');
   
-    var res = fill(app.CURRENT_IMAGE.select(app.BCET_CHART_BANDS), ft);
-  
+    var res = fill(app.CURRENT_IMAGE.select(app.CHART_BANDS), ft);
+    
+    var desc = [fid,'Reflectance',app.project_variables.title].join('_');
+    print('Exporting point values to task');
+    
     Export.table.toDrive({
       collection:res,
-      description: [fid,'Reflectance',app.project_variables.title].join('_'),
+      description: desc,
       fileNamePrefix: fileName, 
       fileFormat: 'CSV'
     });
@@ -544,7 +588,7 @@ app.BCETRegion = function(skip){
   var collection_params = app.COLLECTION_ID.split('/');
   
   if(collection_params[0] == 'LANDSAT'){
-    var bandNames = ee.List(['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7']);
+    var bandNames = ee.List(['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B10', 'B11']);
     var allBands = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11'];
   } else {
     // SENTINEL BANDS
@@ -614,44 +658,33 @@ app.BCETRegion = function(skip){
     var H =  ee.Number(255); // maximum
     var E =  ee.Number(110); // mean
     
-    var i = 0;
-    //var len = bandNames.length().getInfo();
-    var len = bandNames.length().getInfo();
+    var len = ee.Number(bandNames.length());
   
-    app.BCET_BANDS = [];
-  
-    for (i = 0; i < len; i++) {
-      var band_name = bandNames.get(i).getInfo();
+    var seq = ee.List.sequence(ee.Number(0), len.subtract(1));
+    
+    var processBCETBands = function(i){  
+      var band_name = ee.String(bandNames.get(i));
       
       var band = app.CURRENT_IMAGE.select(band_name);
       
-      var params = app.bcet_presets[band_name];
+      var l = ee.Number(stats.get(band_name.cat('_min')));
+      var h = ee.Number(stats.get(band_name.cat('_max')));
+      var e = ee.Number(stats.get(band_name.cat('_mean')));
+      var s = ee.Number(s_values.get(band_name));
       
-      if(params.a === false){
-        
-        var l = ee.Number(stats.get(band_name.concat('_min')));
-        var h = ee.Number(stats.get(band_name.concat('_max')));
-        var e = ee.Number(stats.get(band_name.concat('_mean')));
-        var s = ee.Number(s_values.get(band_name));
-        
-        var b_nom = h.pow(2).multiply(E.subtract(L)).subtract(s.multiply(H.subtract(L))).add(l.pow(2).multiply(H.subtract(E)));
-        var b_den = ee.Number(2).multiply(h.multiply(E.subtract(L)).subtract(e.multiply(H.subtract(L))).add(l.multiply(H.subtract(E))));
-        var b = b_nom.divide(b_den);
-        
-        var a1 = H.subtract(L);
-        var a2 = h.subtract(l);
-        var a3 = h.add(l).subtract(ee.Number(2).multiply(b));
-        
-        var a = a1.divide(a2.multiply(a3));
-        
-        var c = L.subtract(a.multiply(l.subtract(b).pow(2)));
-        
-      } else {
-        var a = params.a;
-        var b = params.b;
-        var c = params.c;
-      }
       
+      var b_nom = h.pow(2).multiply(E.subtract(L)).subtract(s.multiply(H.subtract(L))).add(l.pow(2).multiply(H.subtract(E)));
+      var b_den = ee.Number(2).multiply(h.multiply(E.subtract(L)).subtract(e.multiply(H.subtract(L))).add(l.multiply(H.subtract(E))));
+      var b = b_nom.divide(b_den);
+      
+      var a1 = H.subtract(L);
+      var a2 = h.subtract(l);
+      var a3 = h.add(l).subtract(ee.Number(2).multiply(b));
+      
+      var a = a1.divide(a2.multiply(a3));
+      
+      var c = L.subtract(a.multiply(l.subtract(b).pow(2)));
+    
       var y = app.CURRENT_IMAGE.expression(
         'a * (x - b)**2 + c', {
         'a': a,
@@ -662,14 +695,37 @@ app.BCETRegion = function(skip){
       
       var y_r = y.select(
           ['constant',], // old names
-          [band_name.concat('_BCET')] // new names
+          [band_name.cat(ee.String('_BCET'))] // new names
       );
       
-      app.BCET_BANDS.push(band_name.concat('_BCET'));
-      
-      app.CURRENT_IMAGE = app.CURRENT_IMAGE.addBands(y_r, [band_name.concat('_BCET')]);
+      return y_r;
     }
     
+    var BCETBandNames = function(n){  
+      var band_name = ee.String(bandNames.get(n));
+      return band_name.cat('_BCET');
+    }
+    
+    var BCET_COLLECTION = ee.ImageCollection(seq.map(processBCETBands));
+    app.BCET_BANDS = ee.List(seq.map(BCETBandNames)).getInfo();
+    
+    var stackCollection = function(collection, names) {
+      // Create an initial image.
+      var first = ee.Image(collection.first()).select([]);
+      // Write a function that appends a band to an image.
+      var appendBands = function(image, previous) {
+        return ee.Image(previous).addBands(image);
+      };
+      var appended = ee.Image(collection.iterate(appendBands, first));
+      
+      return appended.rename(names);
+    };
+    
+    var BCET_IMAGE = stackCollection(BCET_COLLECTION, app.BCET_BANDS);
+    
+    app.CURRENT_IMAGE = app.CURRENT_IMAGE.addBands(BCET_IMAGE.toFloat());
+  
+
     app.BCETvisParams = {
       bands: ['B5_BCET', 'B4_BCET', 'B3_BCET'],
       min: 0,
@@ -698,11 +754,18 @@ app.BCETRegion = function(skip){
   
   app.centerRegion();
   app.BCETBandSelect.panel.clear();
+  
   if(skip){
-    app.BandSelectInputs();
+     app.BandSelectInputs();
+     app.PCAInputs(false);
   } else {
-    app.BCETBandSelectInputs();
+     app.BCETBandSelectInputs();
+     app.PCAInputs(true);
   }
+  
+  app.BCET.panel.style().set('shown', false);
+  app.PCABandSelect.panel.style().set('shown', true);
+  app.PCA_Map_Layer.panel.style().set('shown', true);
   app.continueToPoint.panel.style().set('shown', true);
 };
 
@@ -725,7 +788,6 @@ app.refreshBCETLayer = function(){
       gamma: [0.95, 1.1, 1]
     };  
   } 
-
   
   Map.clear();
   Map.addLayer(app.CURRENT_IMAGE, app.BCETvisParams);
@@ -737,25 +799,27 @@ app.refreshBCETLayer = function(){
 app.pointSetup = function(){
   app.BCET.panel.style().set('shown', false);
   app.BCETBandSelect.panel.style().set('shown', false);
+  app.PCABandSelect.panel.style().set('shown', false);
+  app.PCA_Map_Layer.panel.style().set('shown', false);
   app.continueToPoint.panel.style().set('shown', false);
-  
   app.visibleBandSelect();
-  
   app.chartBandSelect.panel.style().set('shown', true);
   app.pointSelect.panel.style().set('shown', true);
   app.export.panel.style().set('shown', true);  
-  app.BCET_CHART_BANDS = app.BCET_BANDS;
+  app.CHART_BANDS = app.BCET_BANDS.concat(app.PCA_BANDS);
 };
 
 app.print_reflectance_data = function(){
   // Empty Collection to fill
   var marker_ids = app.pointerIds;
   var points = [];
+  
   for (var i = 0; i < marker_ids.length; i++) {
     var coords = app.coordData[marker_ids[i]];
     var point = ee.Feature(ee.Geometry.Point(coords.lon, coords.lat), {label: marker_ids[i]});
     points.push(point);
   }
+  
   var pts = ee.FeatureCollection(points);
   
   var ft = ee.FeatureCollection(ee.List([]));
@@ -776,7 +840,7 @@ app.print_reflectance_data = function(){
   var fid = guid();
   var fileName = [fid,app.project_variables.title].join('_');
   
-  var res = fill(app.CURRENT_IMAGE.select(app.BCET_CHART_BANDS), ft);
+  var res = fill(app.CURRENT_IMAGE.select(app.CHART_BANDS), ft);
   
   Export.table.toDrive({
       collection:res,
@@ -791,11 +855,10 @@ app.createPanels = function() {
   app.intro = {
     panel: ui.Panel([
       ui.Label({
-        value: 'Spectral Point Collector',
+        value: 'Spectral Point',
         style: {fontWeight: 'bold', fontSize: '24px', margin: '10px 5px'}
       }),
-      ui.Label('A UI select a region, BCET and grab'+
-              ' spectral signatures for multiple point locations'),
+      ui.Label('An application to gather spectral signatures for multiple point locations'),
       ui.Label({
         value:'Author: Sam Brooke (sbrooke@tuta.io, sambrooke.uk)',
         style: {fontSize: '12px'}
@@ -809,7 +872,7 @@ app.createPanels = function() {
     mapCenter: ui.Checkbox({label: 'Filter to map center', value: true}),
     startDate: ui.Textbox('YYYY-MM-DD', '2014-02-01'),
     endDate: ui.Textbox('YYYY-MM-DD', app.today),
-    applyButton: ui.Button('Get Images', app.applyFilters),
+    applyButton: ui.Button('Apply Filter', app.applyFilters),
     cloudButton: ui.Button('Cloud-free Composite', app.cloudComposite),
     loadingLabel: ui.Label({
       value: 'Loading...',
@@ -893,7 +956,7 @@ app.createPanels = function() {
     ],
     style: app.SECTION_STYLE
   });
-
+  
   /* The visualization section. */
   app.vis = {
     label: ui.Label(),
@@ -1055,7 +1118,9 @@ app.createPanels = function() {
     widgets.push(
       ui.Button({
         label: 'Export Tif', 
-        onClick: app.exportRegion, 
+        onClick: function(){
+          app.exportRegion();
+        },
         style: {
           stretch:'horizontal',
           fontSize: '18px'
@@ -1068,40 +1133,93 @@ app.createPanels = function() {
     }
   };
   
+  app.PCA_INPUT_BANDS = [];
+  app.PCA_BANDS = [];
+  
+  app.updatePCABands = function(){
+    app.PCA_INPUT_BANDS = [];
+    for (var i = 0; i < app.PCA_LAYERS.length; i++) {
+      var input_name = app.PCA_LAYERS[i]+'_pca';
+      if (app[input_name].getValue()){
+        app.PCA_INPUT_BANDS.push(app.PCA_LAYERS[i]);
+      }
+    }
+  };
+
+  app.PCABandSelect = {
+    panel: ui.Panel([
+      ui.Label({
+        value: 'Principal Component Bands:',
+        style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}
+      })
+    ])
+  };
+  
+  app.PCA_LAYERS = false;
+  
+  app.PCAInputs = function(BCET){
+    
+    app.PCA_LAYERS = app.BCET_BANDS;
+
+    for (var i = 0; i < app.PCA_LAYERS.length; i++) {
+      var input_name = app.PCA_LAYERS[i]+'_pca';
+      app[input_name] = ui.Checkbox({
+        label: app.PCA_LAYERS[i],
+        value: true,
+        onChange: app.updatePCABands
+      });
+      app.PCABandSelect.panel.add(app[input_name]);
+    }
+
+    var gen_btn = ui.Button({
+      label: 'Generate principal components', 
+      onClick: function(){
+        app.PCA_Processing();
+      }, 
+      style: {
+        stretch:'horizontal',
+        fontSize: '18px'
+      }
+    });
+    app.PCABandSelect.panel.add(gen_btn);
+    app.updatePCABands();
+  };
+  
   app.BCETBandSelectInputs = function(){
     
     var widgets = [
       ui.Label({
-          value: 'Select Bands:',
-          style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}
+          value: 'Composite layer:',
+          style: {fontWeight: 'bold', fontSize: '15px', margin: '10px 5px'}
       })
     ];
     
+
     app.BCET_R = ui.Select({
-        items: app.BCET_BANDS,
-        value: 'B5_BCET',
-        placeholder: 'R',
-        onChange: function() {
-          app.refreshBCETLayer();
-        }
+      items: app.BCET_BANDS,
+      value: 'B5_BCET',
+      placeholder: 'R',
+      onChange: function(){
+        app.refreshBCETLayer();
+      }
+    });
+
+    app.BCET_B = ui.Select({
+      items: app.BCET_BANDS,
+      value: 'B4_BCET',
+      placeholder: 'B',
+      onChange: function(){
+        app.refreshBCETLayer();
+      }
     });
     
     app.BCET_G = ui.Select({
-        items: app.BCET_BANDS,
-        value: 'B4_BCET',
-        placeholder: 'G',
-        onChange: function() {
-          app.refreshBCETLayer();
-        }
-    });
-    
-    app.BCET_B = ui.Select({
-        items: app.BCET_BANDS,
-        value: 'B3_BCET',
-        placeholder: 'B',
-        onChange: function() {
-          app.refreshBCETLayer();
-        }
+      items: app.BCET_BANDS,
+      value: 'B3_BCET',
+      placeholder: 'G',
+      onChange: function(){
+        app.refreshBCETLayer();
+      }
     });
     
     widgets.push(ui.Label({value: 'R', style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}}));
@@ -1114,14 +1232,16 @@ app.createPanels = function() {
     widgets.push(
       ui.Button({
         label: 'Export Tif', 
-        onClick: app.exportRegion, 
+        onClick: function(){
+          app.exportRegion();
+        },
         style: {
           stretch:'horizontal',
           fontSize: '18px'
         }
       })      
     );
-    
+
     for(var i = 0; i < widgets.length; i++){
        app.BCETBandSelect.panel.add(widgets[i]);
     }
@@ -1182,6 +1302,129 @@ app.createPanels = function() {
     Map.addLayer(k_thresh, false, 'KirschFilter', true, 0.3);    
   };
   
+  app.pcImage = false;
+  
+  app.PCA_Map_Layer = { 
+    panel: ui.Panel([ui.Label({
+      value: 'Add PCA Layer:',
+      style: {fontWeight: 'bold', fontSize: '10px'}
+      })
+    ])
+  };
+    
+  app.showPCALayer = function(){
+    var band = app.PCA_Layer_Select.getValue();
+    Map.addLayer(app.pcImage.select([band]), {min: -2, max: 2}, band);  
+  };
+  
+  app.PCA_Processing = function(){
+    
+    app.pcImage = app.getPrincipalComponents();
+    
+    var pcBands = app.pcImage.select(app.PCA_BANDS);
+    
+    app.CURRENT_IMAGE = app.CURRENT_IMAGE.addBands(pcBands);
+    
+    print('... pca processed ...');
+
+    app.PCA_Layer_Select = ui.Select({
+      items: app.PCA_BANDS,
+      value: 'PC_1',
+      placeholder: 'Layer Name',
+      onChange: function(){
+        app.showPCALayer();
+      }
+    });
+    
+    app.PCA_add_btn = ui.Button({
+      label: 'Add PCA layer', 
+      onClick: function(){
+        app.showPCALayer();
+      }, 
+      style: {
+        stretch:'horizontal',
+        fontSize: '18px'
+      }
+    });
+    app.PCA_Map_Layer.panel.add(app.PCA_Layer_Select);
+    app.PCA_Map_Layer.panel.add(app.PCA_add_btn);
+    app.PCABandSelect.panel.style().set('shown', false);
+  };
+  
+  app.getPrincipalComponents = function() {
+    // Lifted from the GEE example!
+    // https://developers.google.com/earth-engine/arrays_eigen_analysis
+    // Collapse the bands of the image into a 1D array per pixel.
+    
+    print('Generating Principle Components...');
+    
+    var pca_target = app.CURRENT_IMAGE.select(app.PCA_INPUT_BANDS);
+    var bandNames = pca_target.bandNames();
+    
+    var getNewBandNames = function(prefix) {
+      var seq = ee.List.sequence(1, bandNames.length());
+      return seq.map(function(b) {
+        return ee.String(prefix).cat(ee.Number(b).int());
+      });
+    };
+
+    var meanDict = pca_target.reduceRegion({
+      reducer: ee.Reducer.mean(),
+      geometry: app.roi,
+      crs: 'EPSG:4326',
+      crsTransform: [0.00025,0,0,0,-0.00025,0],
+      bestEffort:true
+    });
+
+    var means = ee.Image.constant(meanDict.values(bandNames));
+    var centred = pca_target.subtract(means);
+    var arrays = centred.toArray();
+  
+    // Compute the covariance of the bands within the region.
+    var covar = arrays.reduceRegion({
+      reducer: ee.Reducer.centeredCovariance(),
+      geometry: app.roi,
+      crs: 'EPSG:4326',
+      crsTransform: [0.00025,0,0,0,-0.00025,0],
+      bestEffort:true
+    });
+  
+    // Get the 'array' covariance result and cast to an array.
+    // This represents the band-to-band covariance within the region.
+    var covarArray = ee.Array(covar.get('array'));
+  
+    // Perform an eigen analysis and slice apart the values and vectors.
+    var eigens = covarArray.eigen();
+  
+    // This is a P-length vector of Eigenvalues.
+    var eigenValues = eigens.slice(1, 0, 1);
+    // This is a PxP matrix with eigenvectors in rows.
+    var eigenVectors = eigens.slice(1, 1);
+  
+    // Convert the array image to 2D arrays for matrix computations.
+    var arrayImage = arrays.toArray(1);
+    
+    // Turn the square roots of the Eigenvalues into a P-band image.
+    var sdImage = ee.Image(eigenValues.sqrt())
+      .arrayProject([0]).arrayFlatten([getNewBandNames('sd')]);
+    
+    app.PCA_BANDS = getNewBandNames('PC_').getInfo();
+    
+    print('... complete ...');
+    
+    // Left multiply the image array by the matrix of eigenvectors.
+    var principalComponents = ee.Image(eigenVectors)
+      .matrixMultiply(arrayImage)
+      .arrayProject([0])
+      // Make the one band array image a multi-band image, [] -> image.
+      .arrayFlatten([getNewBandNames('PC_')])
+      // Normalize the PCs by their SDs.
+      .divide(sdImage);
+      
+    return principalComponents
+  };
+
+
   app.BCETBandSelect = {
     panel: ui.Panel([ui.Label('Processing BCET...')], ui.Panel.Layout.flow('horizontal'))
   };
@@ -1191,7 +1434,9 @@ app.createPanels = function() {
       ui.Label('Choose bands for RGB viewing and point selection'),
       ui.Button({
         label: 'Continue to point selection', 
-        onClick: app.pointSetup, 
+        onClick: function(){
+          app.pointSetup();
+        }, 
         style: {
           stretch:'horizontal',
           fontSize: '18px'
@@ -1264,7 +1509,9 @@ app.createPanels = function() {
   
   var exportFusionTableValuesBtn = ui.Button({
     label: 'Export Values Only',
-    onClick: app.exportFusionTable,
+    onClick: function(){
+      app.exportFusionTable();
+    },
     style: {
       fontSize: '16px'
     }
@@ -1288,14 +1535,16 @@ app.createPanels = function() {
   app.edgeDetectPanel = ui.Panel([
     ui.Button({
       label: 'Kirsch Filter',
-      onClick: app.edgeDetectLayer,
+      onClick: function(){
+        app.edgeDetectLayer();
+      },
       style: {
         stretch:'horizontal'
       }
     }),
     app.thresholdSlider,
     ],ui.Panel.Layout.flow('horizontal'));
-    
+  
   app.pointSelect = {
     panel: ui.Panel([
       ui.Label({
@@ -1337,7 +1586,7 @@ app.createPanels = function() {
       app.fusionTableForm
     ])
   };
-
+  
   app.export = {
     panel: ui.Panel([
       ui.Label({
@@ -1345,15 +1594,19 @@ app.createPanels = function() {
         style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}
       }),
       ui.Button({
-        label: 'Export reflectance data to Google Drive (.csv)',
-        onClick: app.print_reflectance_data,
+        label: 'Export pixel values to Google Drive (.csv)',
+        onClick: function(){
+          app.print_reflectance_data();
+        },
         style: {
           stretch:'horizontal'
         }
       }),
       ui.Button({
         label: 'Export coordinates to Google Drive (.kmz)',
-        onClick: app.exportCoords, 
+        onClick: function(){
+          app.exportCoords();
+        }, 
         style: {
           stretch:'horizontal'
         }
@@ -1366,7 +1619,9 @@ app.createPanels = function() {
     panel: ui.Panel([
       ui.Button({
         label: 'Start Debug',
-        onClick: app.debug_post_setup,
+        onClick: function(){
+          app.debug_post_setup();
+        },
         style: {
           stretch:'horizontal'
         }
@@ -1561,21 +1816,21 @@ app.createConstants = function(collection_ID) {
     'b0ffc0' 
   ];
   
-  app.bcet_presets = {
-    'B1': {'a':false, 'b':false, 'c':false},
-    'B2': {'a':false, 'b':false, 'c':false},
-    'B3': {'a':false, 'b':false, 'c':false},
-    'B4': {'a':false, 'b':false, 'c':false},
-    'B5': {'a':false, 'b':false, 'c':false},
-    'B6': {'a':false, 'b':false, 'c':false},
-    'B7': {'a':false, 'b':false, 'c':false},
-    'B8': {'a':false, 'b':false, 'c':false},
-    'B8A': {'a':false, 'b':false, 'c':false},
-    'B9': {'a':false, 'b':false, 'c':false},
-    'B10': {'a':false, 'b':false, 'c':false},
-    'B11': {'a':false, 'b':false, 'c':false},
-    'B12': {'a':false, 'b':false, 'c':false}
-  };
+  // app.bcet_presets = ee.Dictionary({
+  //   'B1': {'a':false, 'b':false, 'c':false},
+  //   'B2': {'a':false, 'b':false, 'c':false},
+  //   'B3': {'a':false, 'b':false, 'c':false},
+  //   'B4': {'a':false, 'b':false, 'c':false},
+  //   'B5': {'a':false, 'b':false, 'c':false},
+  //   'B6': {'a':false, 'b':false, 'c':false},
+  //   'B7': {'a':false, 'b':false, 'c':false},
+  //   'B8': {'a':false, 'b':false, 'c':false},
+  //   'B8A': {'a':false, 'b':false, 'c':false},
+  //   'B9': {'a':false, 'b':false, 'c':false},
+  //   'B10': {'a':false, 'b':false, 'c':false},
+  //   'B11': {'a':false, 'b':false, 'c':false},
+  //   'B12': {'a':false, 'b':false, 'c':false}
+  // });
   
   app.VIS_OPTIONS = app.vis_params();
 };
@@ -1674,6 +1929,8 @@ app.debugSettings = function(){
     app.BCET.panel.style().set('shown', false);
     app.BCETBandSelect.panel.style().set('shown', false);
     app.regionSelect.panel.style().set('shown', false);
+    app.PCABandSelect.panel.style().set('shown', false);
+    app.PCA_Map_Layer.panel.style().set('shown', false);
     app.continueToPoint.panel.style().set('shown', false);
     app.chartBandSelect.panel.style().set('shown', false);
     app.pointSelect.panel.style().set('shown', false);
@@ -1694,6 +1951,8 @@ app.debugSettings = function(){
     app.BCET.panel.style().set('shown', false);
     app.BCETBandSelect.panel.style().set('shown', false);
     app.regionSelect.panel.style().set('shown', false);
+    app.PCABandSelect.panel.style().set('shown', false);
+    app.PCA_Map_Layer.panel.style().set('shown', false);
     app.continueToPoint.panel.style().set('shown', false);
     app.chartBandSelect.panel.style().set('shown', false);
     app.pointSelect.panel.style().set('shown', false);
@@ -1718,6 +1977,7 @@ app.boot = function(){
   app.createHelpers();
   app.createInputs();
   app.createPanels();
+  
   app.debugSettings();
   
   var main = ui.Panel({
@@ -1730,6 +1990,8 @@ app.boot = function(){
       app.regionSelect.panel,
       app.BCET.panel,
       app.BCETBandSelect.panel,
+      app.PCABandSelect.panel,
+      app.PCA_Map_Layer.panel,
       app.continueToPoint.panel,
       app.chartBandSelect.panel,
       app.pointSelect.panel,
