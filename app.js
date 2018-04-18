@@ -1,4 +1,3 @@
-
 // Spectral Point v0.5
 // A UI for to BCET Landsat data and to collect
 // spectral signatures for multiple point locations
@@ -107,7 +106,7 @@ app.setRegion = function() {
     var xMax = ee.Number.parse(app.bottom_right_lon.getValue());
     
     if(yMax && yMin && xMax && xMin){
-      var region_bounds = [xMin, yMin, xMax, yMax];
+      var region_bounds = ee.List([xMin, yMin, xMax, yMax]);
       
       app.project_variables.region_bounds = region_bounds;  
       app.roi = ee.Geometry.Rectangle(region_bounds);
@@ -116,8 +115,8 @@ app.setRegion = function() {
       
       Map.addLayer(app.roi, {color: 'FF0000'}, 'regionRectangle');
       
-      var tl = ee.Geometry.Point(xMin, yMax);
-      var br = ee.Geometry.Point(xMax, yMin);
+      var tl = ee.Geometry.Point(ee.List([xMin, yMax]));
+      var br = ee.Geometry.Point(ee.List([xMax, yMin]));
       
       Map.addLayer(tl, {color: 'FF0000'}, 'regionTopLeft');
       Map.addLayer(br, {color: 'FF0000'}, 'regionBottomRight');
@@ -257,7 +256,7 @@ app.pointMapListen = function(){
     Map.style().set('cursor', 'crosshair');
   
     app.pointListenId = Map.onClick(function(coords) {
-      app.createPoint(coords, false);
+      app.createPoint(ee.Dictionary(coords), false);
     });
   }
 };
@@ -286,7 +285,7 @@ app.removePointMarker = function(marker_id){
 
 app.centreMarker = function(marker_id){
   var coords = app.coordData[marker_id];
-  Map.setCenter(coords.lon, coords.lat);
+  Map.setCenter(coords.get('lon'), coords.get('lat'));
 };
 
 app.updateVisibleBands = function(){
@@ -376,11 +375,13 @@ app.setBandChart = function(marker_ids){
     
     for (var i = 0; i < marker_ids.length; i++) {
       var coords = app.coordData[marker_ids[i]];
-      var point = ee.Feature(ee.Geometry.Point(coords.lon, coords.lat), {label: marker_ids[i]});
+      var point = ee.Feature(ee.Geometry.Point(ee.List([coords.get('lon'), coords.get('lat')])), {label: marker_ids[i]});
       points.push(point);
       plot_series[i] = {color: app.colorList[marker_ids[i]]};
     }
+    
     var bandPoints = ee.FeatureCollection(points);
+    
     if (app.bandChart){
       app.coordMasterPanel.remove(app.bandChart);
     }
@@ -429,11 +430,11 @@ app.coordPanel = function(lat, lon, marker_id){
       style: {padding: '0 10px 0 0', fontSize: '12px', backgroundColor: app.colorList[marker_id]}
     }),
     ui.Label({
-      value: 'Lat: '+lat.toFixed(8).toString(),
+      value: 'Lat: '+lat.getInfo().toFixed(8).toString(),
       style: {padding: '0 10px 0 0', fontSize: '12px'}
     }),
     ui.Label({
-      value: 'Lon: '+lon.toFixed(8).toString(),
+      value: 'Lon: '+lon.getInfo().toFixed(8).toString(),
       style: {padding: '0 10px 0 0', fontSize: '12px'}
     })
   ], ui.Panel.Layout.flow('horizontal'));
@@ -468,7 +469,8 @@ app.createPoint = function(coords, sample_name_original){
     var coord_id = '';
     
     if(sample_name_original){
-      var sample_name = sample_name_original.replace(/ /g, "_").replace(/[|&;$%@"<>()+,]/g, "");
+
+      var sample_name = ee.String(sample_name_original).replace(ee.String('/ /g'), ee.String("_")).replace(ee.String('/[|&;$%@"<>()+,]/g'), ee.String('')).getInfo();
       
       if (app.pointerIds.indexOf(sample_name) < 0){
         coord_id = sample_name;
@@ -478,25 +480,31 @@ app.createPoint = function(coords, sample_name_original){
     } else {
       coord_id = gid;
     }
-    var point = ee.Geometry.Point(coords.lon, coords.lat);
+    
+    var point = ee.Geometry.Point(ee.List([coords.get('lon'), coords.get('lat')]));
     app.pointerIds.push(coord_id);
     app.coordData[coord_id] = coords;
     app.colorList[coord_id] = app.HEX_CODES[app.hex_counter];
-    app.coordMasterPanel.add(app.coordPanel(coords.lat, coords.lon, coord_id));
+    app.coordMasterPanel.add(app.coordPanel(coords.get('lat'), coords.get('lon'), coord_id));
+    
     Map.addLayer(point, {color: app.HEX_CODES[app.hex_counter]}, coord_id);
+    
     if (app.hex_counter < (app.HEX_CODES.length)-1) {
       app.hex_counter++;
     } else {
       app.hex_counter = 0;
     }
+    
     app.setBandChart(app.pointerIds);
 };
 
 app.addManualCoord = function(){
   var gid = guid();
-  var coord_vals = [ee.Number.parse(app.lon_input.getValue()), ee.Number.parse(app.lat_input.getValue())];
-  var coords = ee.Dictionary(['lon', 'lat'], coord_vals);
-  var sample_name = ee.String(app.sample_input.getValue());
+  var coords = ee.Dictionary({
+    lon: ee.Number.parse(app.lon_input.getValue()),
+    lat: ee.Number.parse(app.lat_input.getValue())
+  });
+  var sample_name = app.sample_input.getValue();
   app.createPoint(coords, sample_name);
 };
 
@@ -505,7 +513,7 @@ app.exportCoords = function(){
   if (app.pointerIds){
     for (var i = 0; i < app.pointerIds.length; i++) {
       var coords = app.coordData[app.pointerIds[i]];
-      var point = ee.Feature(ee.Geometry.Point(coords.lon, coords.lat), {label: app.pointerIds[i]});
+      var point = ee.Feature(ee.Geometry.Point(ee.List([coords.get('lon'), coords.get('lat')])), {label: app.pointerIds[i]});
       points.push(point);
     }
     var bandPoints = ee.FeatureCollection(points);
@@ -525,16 +533,11 @@ app.exportFusionTable = function(){
   var points = [];
   
   if(fusion_id){
-    var fid_protocol = ee.String('ft:').cat(fusion_id);
+    var fid_protocol = ee.String('ft:').cat(fusion_id).getInfo();
     var fusion_data = ee.FeatureCollection(fid_protocol);
       
     var names = ee.List(fusion_data.aggregate_array('name'));
     var cc = fusion_data.geometry().coordinates();
-    
-    print('Names');
-    print(names);
-    print('Coords');
-    print(cc);
     
     var getLatLon = function(n){
       var latlon = ee.List(cc.get(n));
@@ -741,8 +744,8 @@ app.BCETRegion = function(skip){
       bestEffort:true
     });
     
-    print('BCET mean values...');
-    print(mean_check);
+    // print('BCET mean values...');
+    // print(mean_check);
   }
   
   Map.clear();
@@ -816,7 +819,7 @@ app.print_reflectance_data = function(){
   
   for (var i = 0; i < marker_ids.length; i++) {
     var coords = app.coordData[marker_ids[i]];
-    var point = ee.Feature(ee.Geometry.Point(coords.lon, coords.lat), {label: marker_ids[i]});
+    var point = ee.Feature(ee.Geometry.Point(ee.List([coords.get('lon'), coords.get('lat')])), {label: marker_ids[i]});
     points.push(point);
   }
   
@@ -1193,7 +1196,6 @@ app.createPanels = function() {
           style: {fontWeight: 'bold', fontSize: '15px', margin: '10px 5px'}
       })
     ];
-    
 
     app.BCET_R = ui.Select({
       items: app.BCET_BANDS,
@@ -1249,24 +1251,41 @@ app.createPanels = function() {
   
   app.loadFusionTable = function(){
     var fusion_id = app.fusion_table_id.getValue();
-    
+
     if(fusion_id){
       var fid_protocol = ee.String('ft:').cat(fusion_id).getInfo();
       var fusion_data = ee.FeatureCollection(fid_protocol);
       
-      var names = fusion_data.aggregate_array('Name').getInfo();
+      var names = ee.List(fusion_data.aggregate_array('name'));
+      
+      var getCoords = function(n){
+        var latlon = ee.List(cc.get(n));
+        var name = names.get(n);
+        
+        var coords = ee.Dictionary({
+          lat:latlon.get(1),
+          lon:latlon.get(0)
+        });
+        
+        return [coords, name];
+      };
+    
       var cc = fusion_data.geometry().coordinates();
-      var g = cc.length().getInfo();
-      for(var i = 0; i < g; i++){
-        var latlon = cc.get(i).getInfo();
-        var coords = {
-          lat:latlon[1],
-          lon:latlon[0]
-        };
-        app.createPoint(coords, names[i]);
+      
+      var seq = ee.List.sequence(0, cc.length().subtract(1));
+          
+      var coord_data = seq.map(getCoords);
+      
+      var g = coord_data.length().getInfo();
+      
+      for(var i=0; i < g; i++){
+        var cd = ee.List(coord_data.get(i));
+        app.createPoint(ee.Dictionary(cd.get(0)), cd.get(1));
       }
+      
       app.fusion_table_id.setValue('');
     }
+
   };
   
   app.edgeDetectLayer = function(){
