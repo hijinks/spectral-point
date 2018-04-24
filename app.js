@@ -1,3 +1,4 @@
+
 // Spectral Point v0.5
 // A UI for to BCET Landsat data and to collect
 // spectral signatures for multiple point locations
@@ -53,6 +54,12 @@ app.selectRegion = function() {
     app.mapAssets = [];
     app.clearLayerAssets(['regionRectangle','regionBottomRight','regionTopLeft']); 
 
+    var createBtns = true;
+    
+    if(app.roi){
+      createBtns = false;
+    }
+    
     var listenerId = Map.onClick(function(coords) {
       
       var point = ee.Geometry.Point(coords.lon, coords.lat);
@@ -89,14 +96,45 @@ app.selectRegion = function() {
         app.top_left_lon.setValue(xMax.getInfo(), false);
         app.bottom_right_lon.setValue(xMin.getInfo(), false);
         
+        if(createBtns){
+          app.continueToBCETBtn();
+        }
+        
       } else {
         Map.addLayer(point, {color: 'FF0000'}, 'regionTopLeft');
       }
     });
 };
 
+app.continueToBCETBtn = function(){
+  
+  var btbclabel = ui.Label({
+    value: 'Next',
+    style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}
+  });
+  
+  var btbcbtn = ui.Button({
+    label: 'Continue to contrast enhancement', 
+    onClick: function(){
+      app.BCET_Region_init();
+    }, 
+    style: {
+      stretch:'horizontal'
+    }
+  });
+  
+  app.regionSelect.panel.add(btbclabel);
+  app.regionSelect.panel.add(btbcbtn);
+};
+
 app.setRegion = function() {
   app.clearLayerAssets(['regionRectangle','regionBottomRight','regionTopLeft']);
+  
+  var createBtns = true;
+  
+  if(app.roi){
+    createBtns = false;
+  }
   
   if(app.top_left_lat.getValue()){
 
@@ -122,6 +160,10 @@ app.setRegion = function() {
       Map.addLayer(br, {color: 'FF0000'}, 'regionBottomRight');
       
       app.centerRegion();
+      
+      if(createBtns){
+        app.continueToBCETBtn();
+      }
     }
   }
 };
@@ -535,14 +577,17 @@ app.exportFusionTable = function(){
   if(fusion_id){
     var fid_protocol = ee.String('ft:').cat(fusion_id).getInfo();
     var fusion_data = ee.FeatureCollection(fid_protocol);
-      
+    
     var names = ee.List(fusion_data.aggregate_array('name'));
+    var surfaces = ee.List(fusion_data.aggregate_array('surface'));
+
     var cc = fusion_data.geometry().coordinates();
     
     var getLatLon = function(n){
       var latlon = ee.List(cc.get(n));
       var name = names.get(n);
-      return ee.Feature(ee.Geometry.Point(latlon), {label: name});
+      var sface = surfaces.get(n);
+      return ee.Feature(ee.Geometry.Point(latlon), {label: name, surface:sface});
     };
     
     var seq = ee.List.sequence(0, cc.length().subtract(1));
@@ -1027,17 +1072,6 @@ app.createPanels = function() {
         style: {
           stretch:'horizontal'
         }
-      }),
-      ui.Label({
-        value: 'Next',
-        style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}
-      }),
-      ui.Button({
-        label: 'Continue to contrast enhancement', 
-        onClick: app.BCET_Region_init, 
-        style: {
-          stretch:'horizontal'
-        }
       })
     ])
   };
@@ -1387,27 +1421,49 @@ app.createPanels = function() {
       });
     };
 
-    var meanDict = pca_target.reduceRegion({
-      reducer: ee.Reducer.mean(),
-      geometry: app.roi,
-      crs: 'EPSG:4326',
-      crsTransform: [0.00025,0,0,0,-0.00025,0],
-      bestEffort:true
-    });
-
-    var means = ee.Image.constant(meanDict.values(bandNames));
-    var centred = pca_target.subtract(means);
-    var arrays = centred.toArray();
+    if(app.roi){
+      var meanDict = pca_target.reduceRegion({
+        reducer: ee.Reducer.mean(),
+        geometry: app.roi,
+        crs: 'EPSG:4326',
+        crsTransform: [0.00025,0,0,0,-0.00025,0],
+        bestEffort:true
+      });
   
-    // Compute the covariance of the bands within the region.
-    var covar = arrays.reduceRegion({
-      reducer: ee.Reducer.centeredCovariance(),
-      geometry: app.roi,
-      crs: 'EPSG:4326',
-      crsTransform: [0.00025,0,0,0,-0.00025,0],
-      bestEffort:true
-    });
+      var means = ee.Image.constant(meanDict.values(bandNames));
+      var centred = pca_target.subtract(means);
+      var arrays = centred.toArray();
+    
+      // Compute the covariance of the bands within the region.
+      var covar = arrays.reduceRegion({
+        reducer: ee.Reducer.centeredCovariance(),
+        geometry: app.roi,
+        crs: 'EPSG:4326',
+        crsTransform: [0.00025,0,0,0,-0.00025,0],
+        bestEffort:true
+      });
+      
+    } else {
+      var meanDict = pca_target.reduceRegion({
+        reducer: ee.Reducer.mean(),
+        crs: 'EPSG:4326',
+        crsTransform: [0.00025,0,0,0,-0.00025,0],
+        bestEffort:true
+      });
   
+      var means = ee.Image.constant(meanDict.values(bandNames));
+      var centred = pca_target.subtract(means);
+      var arrays = centred.toArray();
+    
+      // Compute the covariance of the bands within the region.
+      var covar = arrays.reduceRegion({
+        reducer: ee.Reducer.centeredCovariance(),
+        crs: 'EPSG:4326',
+        crsTransform: [0.00025,0,0,0,-0.00025,0],
+        bestEffort:true
+      });      
+    }
+    
     // Get the 'array' covariance result and cast to an array.
     // This represents the band-to-band covariance within the region.
     var covarArray = ee.Array(covar.get('array'));
