@@ -769,9 +769,9 @@ app.BCETRegion = function(skip){
       return appended.rename(names);
     };
     
-    var BCET_IMAGE = stackCollection(BCET_COLLECTION, app.BCET_BANDS);
+    app.BCET_IMAGE = stackCollection(BCET_COLLECTION, app.BCET_BANDS);
     
-    app.CURRENT_IMAGE = app.CURRENT_IMAGE.addBands(BCET_IMAGE.toFloat());
+    app.CURRENT_IMAGE = app.CURRENT_IMAGE.addBands(app.BCET_IMAGE.toFloat());
   
 
     app.BCETvisParams = {
@@ -800,7 +800,7 @@ app.BCETRegion = function(skip){
     Map.addLayer(app.CURRENT_IMAGE, app.BCETvisParams, 'All Bands', true);
   } else {
     Map.addLayer(app.CURRENT_IMAGE, app.BCETvisParams, 'All Bands', false);
-    Map.addLayer(BCET_IMAGE.toFloat(), app.BCETvisParams,  'BCET Bands', true);
+    Map.addLayer(app.BCET_IMAGE.toFloat(), app.BCETvisParams,  'BCET Bands', true);
   }
   
   if(box){
@@ -825,30 +825,34 @@ app.BCETRegion = function(skip){
 };
 
 
-app.refreshBCETLayer = function(){
+app.refreshLayer = function(){
   // DEFAULT = ['B5_BCET', 'B4_BCET', 'B3_BCET']
   var R = app.BCET_R.getValue();
   var G = app.BCET_G.getValue();
   var B = app.BCET_B.getValue();
   
+  app.clearLayerAssets('roi_outline');
+  
   if(app.BCETskipped){
     app.BCETvisParams = {
       bands: [R, G, B]
-    };    
+    };
+    app.clearLayerAssets('All Bands');
+    Map.addLayer(app.CURRENT_IMAGE, app.BCETvisParams, 'All Bands');
+    
   } else {
     app.BCETvisParams = {
       bands: [R, G, B],
       min: 0,
       max: 255,
       gamma: [0.95, 1.1, 1]
-    };  
-  } 
-  
-  Map.clear();
-  Map.addLayer(app.CURRENT_IMAGE, app.BCETvisParams);
-  if(app.roi_outline){
-    Map.addLayer(app.roi_outline, {color: 'FFFFFF'}, 'roi_outline');
+    };
+    app.clearLayerAssets('BCET Bands');
+    Map.addLayer(app.BCET_IMAGE, app.BCETvisParams, 'BCET Bands');
   }
+  
+  Map.addLayer(app.roi_outline, {color: 'FFFFFF'}, 'roi_outline');
+  
 };
 
 app.pointSetup = function(){
@@ -1130,7 +1134,7 @@ app.createPanels = function() {
         value: 'B5',
         placeholder: 'R',
         onChange: function() {
-          app.refreshBCETLayer();
+          app.refreshLayer();
         }
     });
     
@@ -1139,7 +1143,7 @@ app.createPanels = function() {
         value: 'B4',
         placeholder: 'G',
         onChange: function() {
-          app.refreshBCETLayer();
+          app.refreshLayer();
         }
     });
     
@@ -1148,7 +1152,7 @@ app.createPanels = function() {
         value: 'B3',
         placeholder: 'B',
         onChange: function() {
-          app.refreshBCETLayer();
+          app.refreshLayer();
         }
     });
     
@@ -1243,7 +1247,7 @@ app.createPanels = function() {
       value: 'B5_BCET',
       placeholder: 'R',
       onChange: function(){
-        app.refreshBCETLayer();
+        app.refreshLayer();
       }
     });
 
@@ -1252,7 +1256,7 @@ app.createPanels = function() {
       value: 'B4_BCET',
       placeholder: 'B',
       onChange: function(){
-        app.refreshBCETLayer();
+        app.refreshLayer();
       }
     });
     
@@ -1261,7 +1265,7 @@ app.createPanels = function() {
       value: 'B3_BCET',
       placeholder: 'G',
       onChange: function(){
-        app.refreshBCETLayer();
+        app.refreshLayer();
       }
     });
     
