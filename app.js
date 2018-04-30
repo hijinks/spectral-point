@@ -798,7 +798,7 @@ app.BCETRegion = function(skip){
   
   if(skip){
     Map.addLayer(app.CURRENT_IMAGE, app.BCETvisParams, 'All Bands', true);
-  } else
+  } else {
     Map.addLayer(app.CURRENT_IMAGE, app.BCETvisParams, 'All Bands', false);
     Map.addLayer(BCET_IMAGE.toFloat(), app.BCETvisParams,  'BCET Bands', true);
   }
