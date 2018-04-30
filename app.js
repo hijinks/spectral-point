@@ -794,7 +794,14 @@ app.BCETRegion = function(skip){
   }
   
   Map.clear();
-  Map.addLayer(app.CURRENT_IMAGE, app.BCETvisParams);
+  
+  
+  if(skip){
+    Map.addLayer(app.CURRENT_IMAGE, app.BCETvisParams, 'All Bands', true);
+  } else
+    Map.addLayer(app.CURRENT_IMAGE, app.BCETvisParams, 'All Bands', false);
+    Map.addLayer(BCET_IMAGE.toFloat(), app.BCETvisParams,  'BCET Bands', true);
+  }
   
   if(box){
     Map.addLayer(app.roi_outline, {color: 'FFFFFF'}, 'roi_outline');
@@ -1082,7 +1089,7 @@ app.createPanels = function() {
         value: 'Region',
         style: {fontWeight: 'bold', fontSize: '18px', margin: '10px 5px'}
       }),
-      ui.Label('BCET region of interest (after Liu et al. 1994)'),
+      ui.Label('BCET region of interest (after Guo et al. 1991)'),
       ui.Button({
         label: 'BCET Region', 
         onClick: function(){
@@ -1379,7 +1386,9 @@ app.createPanels = function() {
     app.CURRENT_IMAGE = app.CURRENT_IMAGE.addBands(pcBands);
     
     print('... pca processed ...');
-
+    
+    Map.addLayer(pcBands, {}, 'PCA Bands');
+    
     app.PCA_Layer_Select = ui.Select({
       items: app.PCA_BANDS,
       value: 'PC_1',
