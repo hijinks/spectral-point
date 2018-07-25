@@ -441,10 +441,10 @@ app.setBandChart = function(marker_ids){
     
     if(app.BCETskipped){
       var chartTitle = 'Pixel Values';
-      var chartY = 'R';
+      var chartY = 'DN';
     } else {
       var chartTitle = 'Pixel Values';
-      var chartY = 'R*';
+      var chartY = 'DN';
     }
     
     app.bandChart.setOptions({
